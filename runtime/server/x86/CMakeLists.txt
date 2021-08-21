@@ -166,6 +166,8 @@ add_executable(websocket_server_main bin/websocket_server_main.cc)
 target_link_libraries(websocket_server_main PUBLIC websocket)
 add_executable(label_checker_main bin/label_checker_main.cc)
 target_link_libraries(label_checker_main PUBLIC frontend decoder)
+add_executable(decoder_main_daanzu bin/decoder_main_daanzu.cc)
+target_link_libraries(decoder_main_daanzu PUBLIC frontend decoder)
 
 if(GRPC)
   include_directories(${CMAKE_SOURCE_DIR}/grpc)
