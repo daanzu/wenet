@@ -1,8 +1,9 @@
 // Copyright 2020 Mobvoi Inc. All Rights Reserved.
 // Author: binbinzhang@mobvoi.com (Binbin Zhang)
+// Author: daanzu@gmail.com (David Zurow)
 
-#ifndef DECODER_CTC_PREFIX_BEAM_SEARCH_H_
-#define DECODER_CTC_PREFIX_BEAM_SEARCH_H_
+#ifndef DECODER_CTC_PREFIX_WFST_BEAM_SEARCH_H_
+#define DECODER_CTC_PREFIX_WFST_BEAM_SEARCH_H_
 
 #include <unordered_map>
 #include <vector>
@@ -13,18 +14,20 @@
 #include "decoder/search_interface.h"
 #include "utils/utils.h"
 
+#include "fst/fstlib.h"
+
 namespace wenet {
 
 using TorchModule = torch::jit::script::Module;
 using Tensor = torch::Tensor;
 
-struct CtcPrefixBeamSearchOptions {
+struct CtcPrefixWfstBeamSearchOptions {
   int blank = 0;  // blank id
   int first_beam_size = 10;
   int second_beam_size = 10;
 };
 
-struct PrefixScore {
+struct WfstPrefixScore {
   float s = -kFloatMax;               // blank ending score
   float ns = -kFloatMax;              // none blank ending score
   float v_s = -kFloatMax;             // viterbi blank ending score
@@ -33,7 +36,12 @@ struct PrefixScore {
   std::vector<int> times_s;           // times of viterbi blank path
   std::vector<int> times_ns;          // times of viterbi none blank path
 
-  PrefixScore() = default;
+  fst::StdVectorFst::StateId fst_state = fst::kNoStateId;
+  // bool is_end_of_word = false;
+  // std::vector<int> cur_word;
+  // WfstPrefixScore* parent;
+
+  WfstPrefixScore() = default;
   float score() const { return LogAdd(s, ns); }
   float viterbi_score() const { return v_s > v_ns ? v_s : v_ns; }
   const std::vector<int>& times() const {
@@ -41,7 +49,7 @@ struct PrefixScore {
   }
 };
 
-struct PrefixHash {
+struct WfstPrefixHash {
   size_t operator()(const std::vector<int>& prefix) const {
     size_t hash_code = 0;
     // here we use KB&DR hash code
@@ -52,15 +60,18 @@ struct PrefixHash {
   }
 };
 
-class CtcPrefixBeamSearch : public SearchInterface {
+class CtcPrefixWfstBeamSearch : public SearchInterface {
  public:
-  explicit CtcPrefixBeamSearch(const CtcPrefixBeamSearchOptions& opts);
+  explicit CtcPrefixWfstBeamSearch(std::shared_ptr<fst::StdFst> fst, std::shared_ptr<fst::SymbolTable> word_table, std::shared_ptr<fst::SymbolTable> unit_table, const CtcPrefixWfstBeamSearchOptions& opts);
+
+  using PrefixScore = WfstPrefixScore;
+  using PrefixHash = WfstPrefixHash;
 
   void Search(const torch::Tensor& logp) override;
   void Reset() override;
-  // CtcPrefixBeamSearch do nothing at FinalizeSearch
+  // CtcPrefixWfstBeamSearch do nothing at FinalizeSearch
   void FinalizeSearch() override {}
-  SearchType Type() const override { return SearchType::kPrefixBeamSearch; }
+  SearchType Type() const override { return SearchType::kPrefixWfstBeamSearch; }
 
   const std::vector<std::vector<int>>& hypotheses() const {
     return hypotheses_;
@@ -90,12 +101,21 @@ class CtcPrefixBeamSearch : public SearchInterface {
   std::vector<std::vector<int>> times_;
 
   std::unordered_map<std::vector<int>, PrefixScore, PrefixHash> cur_hyps_;
-  const CtcPrefixBeamSearchOptions& opts_;
+  const CtcPrefixWfstBeamSearchOptions& opts_;
+
+  std::shared_ptr<fst::StdFst> fst_;
+  fst::SortedMatcher<fst::StdFst> matcher_;
+  std::shared_ptr<fst::SymbolTable> word_table_;
+  std::shared_ptr<fst::SymbolTable> unit_table_;
+  std::string space_symbol_ = kSpaceSymbol;
+
+  float GetFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score);
+  bool IdIsStartOfWord(int id);
 
  public:
-  WENET_DISALLOW_COPY_AND_ASSIGN(CtcPrefixBeamSearch);
+  WENET_DISALLOW_COPY_AND_ASSIGN(CtcPrefixWfstBeamSearch);
 };
 
 }  // namespace wenet
 
-#endif  // DECODER_CTC_PREFIX_BEAM_SEARCH_H_
+#endif  // DECODER_CTC_PREFIX_WFST_BEAM_SEARCH_H_

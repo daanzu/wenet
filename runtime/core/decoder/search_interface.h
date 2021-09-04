@@ -14,6 +14,7 @@ namespace wenet {
 enum SearchType {
   kPrefixBeamSearch = 0x00,
   kWfstBeamSearch = 0x01,
+  kPrefixWfstBeamSearch = 0x02,
 };
 
 class SearchInterface {

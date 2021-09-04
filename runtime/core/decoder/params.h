@@ -50,6 +50,8 @@ DEFINE_string(dict_path, "",
 DEFINE_string(
     unit_path, "",
     "e2e model unit symbol table, used for get timestamp of the result");
+DEFINE_string(
+    grammar_symbol_path, "", "");
 
 namespace wenet {
 
@@ -109,6 +111,16 @@ std::shared_ptr<DecodeResource> InitDecodeResourceFromFlags() {
     unit_table = symbol_table;
   }
   resource->unit_table = unit_table;
+
+  if (!FLAGS_grammar_symbol_path.empty()) {
+    LOG(INFO) << "Reading grammar words table " << FLAGS_grammar_symbol_path;
+    auto grammar_symbol_table = std::shared_ptr<fst::SymbolTable>(
+        fst::SymbolTable::ReadText(FLAGS_grammar_symbol_path));
+    CHECK(grammar_symbol_table != nullptr);
+    resource->grammar_symbol_table = grammar_symbol_table;
+    CHECK(symbol_table != nullptr);
+    resource->unit_table = symbol_table;
+  }
 
   return resource;
 }

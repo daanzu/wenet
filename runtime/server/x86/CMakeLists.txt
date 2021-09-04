@@ -138,6 +138,7 @@ add_subdirectory(kaldi)
 # decoder
 add_library(decoder STATIC
   decoder/ctc_prefix_beam_search.cc
+  decoder/ctc_prefix_wfst_beam_search.cc
   decoder/ctc_wfst_beam_search.cc
   decoder/ctc_endpoint.cc
   decoder/torch_asr_decoder.cc

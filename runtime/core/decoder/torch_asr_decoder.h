@@ -17,6 +17,7 @@
 
 #include "decoder/ctc_endpoint.h"
 #include "decoder/ctc_prefix_beam_search.h"
+#include "decoder/ctc_prefix_wfst_beam_search.h"
 #include "decoder/ctc_wfst_beam_search.h"
 #include "decoder/torch_asr_model.h"
 #include "frontend/feature_pipeline.h"
@@ -46,6 +47,7 @@ struct DecodeOptions {
   float reverse_weight = 0.0;
   CtcEndpointConfig ctc_endpoint_config;
   CtcPrefixBeamSearchOptions ctc_prefix_search_opts;
+  CtcPrefixWfstBeamSearchOptions ctc_prefix_wfst_search_opts;
   CtcWfstBeamSearchOptions ctc_wfst_search_opts;
 };
 
@@ -81,6 +83,7 @@ struct DecodeResource {
   std::shared_ptr<fst::SymbolTable> symbol_table = nullptr;
   std::shared_ptr<fst::Fst<fst::StdArc>> fst = nullptr;
   std::shared_ptr<fst::SymbolTable> unit_table = nullptr;
+  std::shared_ptr<fst::SymbolTable> grammar_symbol_table = nullptr;
 };
 
 // Torch ASR decoder
