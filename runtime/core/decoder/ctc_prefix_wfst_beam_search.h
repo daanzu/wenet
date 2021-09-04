@@ -36,10 +36,27 @@ struct WfstPrefixScore {
   std::vector<int> times_s;           // times of viterbi blank path
   std::vector<int> times_ns;          // times of viterbi none blank path
 
-  fst::StdVectorFst::StateId fst_state = fst::kNoStateId;
+  fst::StdFst::StateId fst_state = fst::kNoStateId;
+  // std::unordered_map<, fst::StdFst::StateId> fst_state = fst::kNoStateId;
   // bool is_end_of_word = false;
   // std::vector<int> cur_word;
   // WfstPrefixScore* parent;
+
+  void set_fst_state(fst::StdFst::StateId state) {
+    if (fst_state != fst::kNoStateId) {
+      // LOG(FATAL) << "fst_state is already set";
+      // if (fst_state != state) {
+      if (fst_state > state) {
+        LOG(FATAL) << "fst_state is already set to " << fst_state << " not " << state;
+      }
+    }
+    fst_state = state;
+  }
+
+  std::vector<int> update_times;
+  void update_at_time(int time) {
+    update_times.push_back(time);
+  }
 
   WfstPrefixScore() = default;
   float score() const { return LogAdd(s, ns); }
@@ -109,8 +126,11 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   std::shared_ptr<fst::SymbolTable> unit_table_;
   std::string space_symbol_ = kSpaceSymbol;
 
+  PrefixScore& GetNextHyp(std::unordered_map<std::vector<int>, PrefixScore, PrefixHash>& next_hyps, const std::vector<int>& prefix, const PrefixScore& current_score);
   float GetFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score);
   bool IdIsStartOfWord(int id);
+  std::string IdsToString(const std::vector<int> ids, int extra_id = -1);
+  // void LogHypothesis(const std::pair<std::vector<int>, PrefixScore>& hypothesis);
 
  public:
   WENET_DISALLOW_COPY_AND_ASSIGN(CtcPrefixWfstBeamSearch);
