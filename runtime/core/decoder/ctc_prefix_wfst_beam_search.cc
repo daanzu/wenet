@@ -16,6 +16,9 @@ namespace wenet {
 
 using PrefixScore = CtcPrefixWfstBeamSearch::PrefixScore;
 using PrefixHash = CtcPrefixWfstBeamSearch::PrefixHash;
+
+static_assert(std::numeric_limits<float>::is_iec559, "IEEE 754 required");
+constexpr float SuperNoLikelihood = -std::numeric_limits<float>::infinity();
 constexpr float NoLikelihood = -std::numeric_limits<float>::max();
 constexpr float FullLikelihood = 0.0f;
 
@@ -94,10 +97,9 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
         if (id == opts_.blank) {
           // Case 0: *a + ε => *a
           // If we propose a blank, the prefix doesn't change. Only the probability of ending in blank gets updated, and the previous character could be either blank or nonblank.
-          // PrefixScore& next_score = next_hyps[prefix];
           PrefixScore& next_score = GetNextHyp(next_hyps, prefix, prefix_score);
           // next_score.set_fst_state(prefix_score.fst_state);
-          // next_score.update_at_time(abs_time_step_);
+          next_score.update_at_time(abs_time_step_);
           next_score.s = LogAdd(next_score.s, prefix_score.score() + prob);
           next_score.v_s = prefix_score.viterbi_score() + prob;
           next_score.times_s = prefix_score.times();
@@ -105,10 +107,9 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
         } else if (!prefix.empty() && id == prefix.back()) {
           // Case 1: *a + a => *a
           // If we propose a repeat nonblank, after a nonblank, the prefix doesn't change. Only the probability of ending in nonblank gets updated, and we know the previous character was nonblank.
-          // PrefixScore& next_score1 = next_hyps[prefix];
           PrefixScore& next_score1 = GetNextHyp(next_hyps, prefix, prefix_score);
           // next_score1.set_fst_state(prefix_score.fst_state);
-          // next_score1.update_at_time(abs_time_step_);
+          next_score1.update_at_time(abs_time_step_);
           next_score1.ns = LogAdd(next_score1.ns, prefix_score.ns + prob);
           if (next_score1.v_ns < prefix_score.v_ns + prob) {
             next_score1.v_ns = prefix_score.v_ns + prob;
@@ -124,10 +125,13 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
           // If we propose a repeat nonblank, after a blank, the prefix does change. Only the probability of ending in nonblank gets updated, and we know the previous character was blank.
           std::vector<int> new_prefix(prefix);
           new_prefix.emplace_back(id);
-          // PrefixScore& next_score2 = next_hyps[new_prefix];
           PrefixScore& next_score2 = GetNextHyp(next_hyps, new_prefix, prefix_score);
-          // next_score2.update_at_time(abs_time_step_);
+          next_score2.update_at_time(abs_time_step_);
           auto fst_score = GetFstScore(prefix, prefix_score, id, next_score2);
+          if (fst_score == NoLikelihood) {
+            next_hyps.erase(new_prefix);
+            continue;
+          }
           next_score2.ns = LogAdd(next_score2.ns, prefix_score.s + prob + fst_score);
           if (next_score2.v_ns < prefix_score.v_s + prob) {
             next_score2.v_ns = prefix_score.v_s + prob;
@@ -141,10 +145,13 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
           // If we propose a non-repeat nonblank, the prefix must change. Only the probability of ending in nonblank gets updated, and the previous character could be either blank or nonblank.
           std::vector<int> new_prefix(prefix);
           new_prefix.emplace_back(id);
-          // PrefixScore& next_score = next_hyps[new_prefix];
           PrefixScore& next_score = GetNextHyp(next_hyps, new_prefix, prefix_score);
-          // next_score.update_at_time(abs_time_step_);
+          next_score.update_at_time(abs_time_step_);
           auto fst_score = GetFstScore(prefix, prefix_score, id, next_score);
+          if (fst_score == NoLikelihood) {
+            next_hyps.erase(new_prefix);
+            continue;
+          }
           next_score.ns = LogAdd(next_score.ns, prefix_score.score() + prob + fst_score);
           if (next_score.v_ns < prefix_score.viterbi_score() + prob) {
             next_score.v_ns = prefix_score.viterbi_score() + prob;
@@ -173,10 +180,8 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
     viterbi_likelihood_.clear();
     times_.clear();
     for (auto& item : arr) {
-      // LogHypothesis(item);
-      auto sentence = IdsToString(item.first);
-      if (sentence.size() > 80) sentence = sentence.substr(sentence.size() - 80);
-      VLOG(1) << "t" << abs_time_step_ << ": " << sentence << " = " << item.second.score() << "    fst_state=" << item.second.fst_state;
+      VLOG(1) << "t" << abs_time_step_ << ": " << IdsToString(item.first, -1, 80) << " = " << item.second.score() << "    fst_state=" << item.second.fst_state;
+              // << "    update_times=" << item.second.update_times.size();
       cur_hyps_[item.first] = item.second;
       hypotheses_.emplace_back(std::move(item.first));
       likelihood_.emplace_back(item.second.score());
@@ -196,74 +201,64 @@ PrefixScore& CtcPrefixWfstBeamSearch::GetNextHyp(std::unordered_map<std::vector<
 }
 
 float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score) {
-  static std::set<std::pair<std::vector<int>, int>> seen_combinations;
-  {
-    std::vector<int> word_piece_ids;
-    // std::copy_if(current_prefix.begin(), current_prefix.end(), std::back_inserter(word_piece_ids), [this](int id) { return (id != opts_.blank); });
-    word_piece_ids = current_prefix;
+  auto current_prefix_words = IdsToString(current_prefix);
+  auto all_words = IdsToString(current_prefix, id);
+  if (false) {
     std::vector<std::string> word_pieces;
-    std::transform(word_piece_ids.begin(), word_piece_ids.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
+    std::transform(current_prefix.begin(), current_prefix.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
     word_pieces.emplace_back(unit_table_->Find(id));
     auto word = JoinString(" | ", word_pieces);
+    static std::set<std::pair<std::vector<int>, int>> seen_combinations;
     if (seen_combinations.find(std::make_pair(current_prefix, id)) == seen_combinations.end()) {
       seen_combinations.insert(std::make_pair(current_prefix, id));
       VLOG(2) << "GetFstScore: new: t" << abs_time_step_ << ": " << word;
     } else {
-      // LOG(WARNING) << "GetFstScore: " << current_prefix << " " << id;
       VLOG(2) << "GetFstScore: old: t" << abs_time_step_ << ": " << word;
     }
   }
 
-  auto fst_state = current_prefix_score.fst_state != fst::kNoStateId ? current_prefix_score.fst_state : fst_->Start();
-  // next_prefix_score.fst_state = fst_state;
-  // VLOG(5) << "    " << next_prefix_score.fst_state << " -> " << fst_state;
-  // next_prefix_score.set_fst_state(fst_state);
-
-  if (current_prefix.empty() || !IdIsStartOfWord(id)) {
-    // next_prefix_score.fst_state = current_prefix_score.fst_state;
-    // VLOG(5) << "    " << next_prefix_score.fst_state << " -> " << fst_state;
-    // next_prefix_score.set_fst_state(fst_state);
-    VLOG(3) << "    return: not ready";
+  if (current_prefix.empty()) {
+    VLOG(3) << "    return: prefix empty";
+    return FullLikelihood;
+  }
+  if (!IdIsStartOfWord(id)) {
+    VLOG(3) << "    return: not start of word";
     return FullLikelihood;
   }
 
   // Build the just-completed word.
-  auto start_of_word = std::find_if(current_prefix.rbegin(), current_prefix.rend(), [this](int id) { return IdIsStartOfWord(id); }).base() - 1;
+  // auto start_of_word = std::find_if(current_prefix.rbegin(), current_prefix.rend(), [this](int id) { return IdIsStartOfWord(id); }).base() - 1;
+  auto start_of_word_revit = std::find_if(current_prefix.rbegin(), current_prefix.rend(), [this](int id) { return IdIsStartOfWord(id); });
+  auto start_of_word = start_of_word_revit == current_prefix.rend() ? current_prefix.begin() : start_of_word_revit.base() - 1;
   // auto word_piece_ids = std::vector<int>(start_of_word, current_prefix.end());
-  std::vector<int> word_piece_ids;
-  std::copy_if(start_of_word, current_prefix.end(), std::back_inserter(word_piece_ids), [this](int id) { return (id != opts_.blank); });
+  if (std::any_of(start_of_word, current_prefix.end(), [this](int id) { return (id == opts_.blank); })) {
+    VLOG(0) << "    found blank " << (start_of_word == current_prefix.end());
+  }
+  // std::vector<int> word_piece_ids;
+  // std::copy_if(start_of_word, current_prefix.end(), std::back_inserter(word_piece_ids), [this](int id) { return (id != opts_.blank); });
   std::vector<std::string> word_pieces;
-  std::transform(word_piece_ids.begin(), word_piece_ids.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
+  std::transform(start_of_word, current_prefix.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
   auto word = JoinString("", word_pieces);
-  // CHECK_EQ(word.substr(0, 3), space_symbol_);
   if (word.substr(0, 3) == space_symbol_) {
     word = word.substr(3);
-  } else {
-    // word = word.substr(0);
   }
   auto word_id = word_table_->Find(word);
   if (word_id == fst::SymbolTable::kNoSymbol) {
-    // next_prefix_score.fst_state = current_prefix_score.fst_state;
     VLOG(3) << "    return: not in word_table_";
-    // VLOG(5) << "    " << next_prefix_score.fst_state << " -> " << fst_state;
-    // next_prefix_score.set_fst_state(fst_state);
     return NoLikelihood;
-    return FullLikelihood;
   }
 
-  static std::set<int> seen_word_ids;
-  if (seen_word_ids.find(word_id) == seen_word_ids.end()) {
-    seen_word_ids.insert(word_id);
-  }
+  // static std::set<int> seen_word_ids;
+  // if (seen_word_ids.find(word_id) == seen_word_ids.end()) {
+  //   seen_word_ids.insert(word_id);
+  // }
+
+  auto fst_state = current_prefix_score.fst_state != fst::kNoStateId ? current_prefix_score.fst_state : fst_->Start();
   matcher_.SetState(fst_state);
   auto found = matcher_.Find(word_id);
   if (!found) {
-    // next_prefix_score.fst_state = current_prefix_score.fst_state;
     VLOG(3) << "    return: not found at fst_state " << fst_state;
-    // VLOG(5) << "    " << next_prefix_score.fst_state << " -> " << fst_state;
-    // next_prefix_score.set_fst_state(fst_state);
     return NoLikelihood;
-    return FullLikelihood;
   }
 
   int num_arcs = 1;
@@ -276,11 +271,7 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
     auto nextstate = matcher_.Value().nextstate;
     LOG(WARNING) << "GetFstScore num_arcs>1: #" << num_arcs << " weight=" << weight << " nextstate=" << nextstate;
   }
-  // if (num_arcs > 1) {
-  //   LOG(WARNING) << "GetFstScore num_arcs>1";
-  // }
 
-  // next_prefix_score.fst_state = nextstate;
   VLOG(1) << "    " << IdsToString(current_prefix, id) << " : fst_state " << next_prefix_score.fst_state << " -> " << nextstate;
   next_prefix_score.set_fst_state(nextstate);
   return -weight;
@@ -292,20 +283,23 @@ bool CtcPrefixWfstBeamSearch::IdIsStartOfWord(int id) {
     && std::equal(space_symbol_.begin(), space_symbol_.end(), word_piece.begin());
 }
 
-std::string CtcPrefixWfstBeamSearch::IdsToString(const std::vector<int> ids, int extra_id) {
+std::string CtcPrefixWfstBeamSearch::IdsToString(const std::vector<int> ids, int extra_id, int max_length) {
   std::vector<std::string> word_pieces;
   std::transform(ids.begin(), ids.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
   if (extra_id != -1) {
     word_pieces.emplace_back(unit_table_->Find(extra_id));
   }
-  return JoinString("", word_pieces);
+  auto word = JoinString("", word_pieces);
+  if (max_length != -1 && word.size() > max_length) {
+    word = word.substr(word.size() - max_length);
+  }
+  return word;
 }
 
-// void CtcPrefixWfstBeamSearch::LogHypothesis(const std::pair<std::vector<int>, PrefixScore>& hypothesis) {
-//   std::vector<std::string> word_pieces;
-//   std::transform(hypothesis.first.begin(), hypothesis.first.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
-//   auto word = JoinString("", word_pieces);
-//   VLOG(1) << "Hypothesis: t" << abs_time_step_ << ": " << word << " = " << hypothesis.second.score();
-// }
+// TODO:
+// - partial match, trie
+// - turn on/off free ctc
+// - epsilon transitions
+// - multiple ambiguous arcs
 
 }  // namespace wenet
