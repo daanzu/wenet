@@ -20,13 +20,16 @@ namespace wenet {
 
 using TorchModule = torch::jit::script::Module;
 using Tensor = torch::Tensor;
+using StateId = fst::StdFst::StateId;
 
 struct CtcPrefixWfstBeamSearchOptions {
   int blank = 0;  // blank id
   int first_beam_size = 10;
   int second_beam_size = 10;
+  bool strict = true;
 };
 
+// Represents everything for a single Prefix, which is a sequence of regularized CTC labels, and so can only grow monotonically.
 struct WfstPrefixScore {
   float s = -kFloatMax;               // blank ending score
   float ns = -kFloatMax;              // none blank ending score
@@ -36,9 +39,10 @@ struct WfstPrefixScore {
   std::vector<int> times_s;           // times of viterbi blank path
   std::vector<int> times_ns;          // times of viterbi none blank path
 
-  fst::StdFst::StateId fst_state = fst::kNoStateId;
+  StateId fst_state = fst::kNoStateId;
+  bool is_in_grammar = true;
 
-  void set_fst_state(fst::StdFst::StateId state) {
+  void set_fst_state(StateId state) {
     if (fst_state != fst::kNoStateId) {
       // LOG(FATAL) << "fst_state is already set";
       // if (fst_state != state) {
@@ -113,14 +117,16 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   std::vector<float> viterbi_likelihood_;
   std::vector<std::vector<int>> times_;
 
+  // Map from prefix to its score
   std::unordered_map<std::vector<int>, PrefixScore, PrefixHash> cur_hyps_;
+
   const CtcPrefixWfstBeamSearchOptions& opts_;
 
   std::shared_ptr<fst::StdFst> fst_;
   fst::SortedMatcher<fst::StdFst> matcher_;
   std::shared_ptr<fst::SymbolTable> word_table_;
   std::shared_ptr<fst::SymbolTable> unit_table_;
-  std::string space_symbol_ = kSpaceSymbol;
+  const std::string space_symbol_ = kSpaceSymbol;
 
   PrefixScore& GetNextHyp(std::unordered_map<std::vector<int>, PrefixScore, PrefixHash>& next_hyps, const std::vector<int>& prefix, const PrefixScore& current_score);
   float GetFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score);

@@ -128,7 +128,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
           PrefixScore& next_score2 = GetNextHyp(next_hyps, new_prefix, prefix_score);
           next_score2.update_at_time(abs_time_step_);
           auto fst_score = GetFstScore(prefix, prefix_score, id, next_score2);
-          if (fst_score == NoLikelihood) {
+          if (opts_.strict && fst_score == NoLikelihood) {
             next_hyps.erase(new_prefix);
             continue;
           }
@@ -148,7 +148,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
           PrefixScore& next_score = GetNextHyp(next_hyps, new_prefix, prefix_score);
           next_score.update_at_time(abs_time_step_);
           auto fst_score = GetFstScore(prefix, prefix_score, id, next_score);
-          if (fst_score == NoLikelihood) {
+          if (opts_.strict && fst_score == NoLikelihood) {
             next_hyps.erase(new_prefix);
             continue;
           }
@@ -201,6 +201,10 @@ PrefixScore& CtcPrefixWfstBeamSearch::GetNextHyp(std::unordered_map<std::vector<
 }
 
 float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score) {
+  if (!current_prefix_score.is_in_grammar) {
+    return FullLikelihood;
+  }
+
   auto current_prefix_words = IdsToString(current_prefix);
   auto all_words = IdsToString(current_prefix, id);
   if (false) {
@@ -217,25 +221,17 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
     }
   }
 
-  if (current_prefix.empty()) {
-    VLOG(3) << "    return: prefix empty";
-    return FullLikelihood;
-  }
-  if (!IdIsStartOfWord(id)) {
-    VLOG(3) << "    return: not start of word";
+  if (current_prefix.empty() || !IdIsStartOfWord(id)) {
+    VLOG(3) << "    return: prefix empty or not start of word";
     return FullLikelihood;
   }
 
   // Build the just-completed word.
-  // auto start_of_word = std::find_if(current_prefix.rbegin(), current_prefix.rend(), [this](int id) { return IdIsStartOfWord(id); }).base() - 1;
   auto start_of_word_revit = std::find_if(current_prefix.rbegin(), current_prefix.rend(), [this](int id) { return IdIsStartOfWord(id); });
   auto start_of_word = start_of_word_revit == current_prefix.rend() ? current_prefix.begin() : start_of_word_revit.base() - 1;
-  // auto word_piece_ids = std::vector<int>(start_of_word, current_prefix.end());
-  if (std::any_of(start_of_word, current_prefix.end(), [this](int id) { return (id == opts_.blank); })) {
-    VLOG(0) << "    found blank " << (start_of_word == current_prefix.end());
-  }
-  // std::vector<int> word_piece_ids;
-  // std::copy_if(start_of_word, current_prefix.end(), std::back_inserter(word_piece_ids), [this](int id) { return (id != opts_.blank); });
+  // if (std::any_of(start_of_word, current_prefix.end(), [this](int id) { return (id == opts_.blank); })) {
+  //   VLOG(0) << "    found blank " << (start_of_word == current_prefix.end());
+  // }
   std::vector<std::string> word_pieces;
   std::transform(start_of_word, current_prefix.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
   auto word = JoinString("", word_pieces);
@@ -269,7 +265,7 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
     ++num_arcs;
     auto weight = matcher_.Value().weight.Value();
     auto nextstate = matcher_.Value().nextstate;
-    LOG(WARNING) << "GetFstScore num_arcs>1: #" << num_arcs << " weight=" << weight << " nextstate=" << nextstate;
+    LOG(FATAL) << "GetFstScore num_arcs>1: #" << num_arcs << " weight=" << weight << " nextstate=" << nextstate;
   }
 
   VLOG(1) << "    " << IdsToString(current_prefix, id) << " : fst_state " << next_prefix_score.fst_state << " -> " << nextstate;
