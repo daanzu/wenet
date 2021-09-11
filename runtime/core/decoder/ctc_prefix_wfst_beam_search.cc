@@ -9,6 +9,9 @@
 #include <unordered_map>
 #include <utility>
 
+#include "kaldi/base/kaldi-utils.h"
+#include "kaldi/fstext/fstext-utils.h"
+
 #include "utils/log.h"
 #include "utils/string.h"
 
@@ -23,7 +26,9 @@ constexpr float NoLikelihood = -std::numeric_limits<float>::max();
 constexpr float FullLikelihood = 0.0f;
 
 CtcPrefixWfstBeamSearch::CtcPrefixWfstBeamSearch(std::shared_ptr<fst::StdFst> fst, std::shared_ptr<fst::SymbolTable> word_table, std::shared_ptr<fst::SymbolTable> unit_table, const CtcPrefixWfstBeamSearchOptions& opts)
-    : opts_(opts), fst_(fst), matcher_(*fst_, fst::MATCH_INPUT), word_table_(word_table), unit_table_(unit_table) {
+    : opts_(opts), fst_(fst), matcher_(*fst_, fst::MATCH_INPUT), word_table_(word_table), unit_table_(unit_table),
+      dictation_lexiconfree_state_(word_table->Find("#NONTERM:DICTATION_LEXICONFREE")) {
+  BuildUnitDictionaryTrie();
   Reset();
 }
 
@@ -226,22 +231,54 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
     return FullLikelihood;
   }
 
-  // Build the just-completed word.
-  auto start_of_word_revit = std::find_if(current_prefix.rbegin(), current_prefix.rend(), [this](int id) { return IdIsStartOfWord(id); });
-  auto start_of_word = start_of_word_revit == current_prefix.rend() ? current_prefix.begin() : start_of_word_revit.base() - 1;
-  // if (std::any_of(start_of_word, current_prefix.end(), [this](int id) { return (id == opts_.blank); })) {
-  //   VLOG(0) << "    found blank " << (start_of_word == current_prefix.end());
-  // }
-  std::vector<std::string> word_pieces;
-  std::transform(start_of_word, current_prefix.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
-  auto word = JoinString("", word_pieces);
-  if (word.substr(0, 3) == space_symbol_) {
-    word = word.substr(3);
-  }
-  auto word_id = word_table_->Find(word);
-  if (word_id == fst::SymbolTable::kNoSymbol) {
-    VLOG(3) << "    return: not in word_table_";
-    return NoLikelihood;
+  int word_id = -1;
+  if (true) {
+    if (IdIsStartOfWord(id)) {
+      next_prefix_score.dictionary_fst_state = dictionary_trie_fst_->Start();
+    }
+
+    // Check whether the current partial word prefix could be a word in the dictionary.
+    auto& matcher = *dictionary_trie_matcher_;
+    auto dictionary_fst_state = current_prefix_score.dictionary_fst_state != fst::kNoStateId ? current_prefix_score.dictionary_fst_state : dictionary_trie_fst_->Start();
+    matcher.SetState(dictionary_fst_state);
+    if (!matcher.Find(id)) {
+      VLOG(3) << "    return: partial word prefix not in dictionary";
+      return NoLikelihood;
+    }
+    auto nextstate = matcher.Value().nextstate;
+    auto olabel = matcher.Value().olabel;
+    auto nextstate_final = (dictionary_trie_fst_->Final(nextstate) != fst::StdArc::Weight::Zero());
+
+    matcher.Next();
+    CHECK_EQ(matcher.Done(), true);
+
+    if (!nextstate_final) {
+      next_prefix_score.dictionary_fst_state = nextstate;
+      VLOG(3) << "    return: partial word prefix okay so far, but not a full word yet";
+      return FullLikelihood;
+    }
+    // Now guaranteed to be a word in the word table. But adding more units after this one may not be a word, so we must wait for a space character.
+    // if (olabel == 0) {
+    // word_id = olabel;
+
+  } else {
+    // Build the previously-completed word.
+    auto start_of_word_revit = std::find_if(current_prefix.rbegin(), current_prefix.rend(), [this](int id) { return IdIsStartOfWord(id); });
+    auto start_of_word = start_of_word_revit == current_prefix.rend() ? current_prefix.begin() : start_of_word_revit.base() - 1;
+    // if (std::any_of(start_of_word, current_prefix.end(), [this](int id) { return (id == opts_.blank); })) {
+    //   VLOG(0) << "    found blank " << (start_of_word == current_prefix.end());
+    // }
+    std::vector<std::string> word_pieces;
+    std::transform(start_of_word, current_prefix.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
+    auto word = JoinString("", word_pieces);
+    if (word.substr(0, 3) == space_symbol_) {
+      word = word.substr(3);
+    }
+    word_id = word_table_->Find(word);
+    if (word_id == fst::SymbolTable::kNoSymbol) {
+      VLOG(3) << "    return: not in word_table_";
+      return NoLikelihood;
+    }
   }
 
   // static std::set<int> seen_word_ids;
@@ -251,8 +288,14 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
 
   auto fst_state = current_prefix_score.fst_state != fst::kNoStateId ? current_prefix_score.fst_state : fst_->Start();
   matcher_.SetState(fst_state);
-  auto found = matcher_.Find(word_id);
-  if (!found) {
+  if (true && matcher_.Find(0)) {
+    VLOG(0) << "    found epsilon";
+  }
+  if (true && matcher_.Find(dictation_lexiconfree_state_)) {
+    VLOG(0) << "    found dictation_lexiconfree_state_";
+    next_prefix_score.is_in_grammar = false;
+  }
+  else if (!matcher_.Find(word_id)) {
     VLOG(3) << "    return: not found at fst_state " << fst_state;
     return NoLikelihood;
   }
@@ -273,10 +316,13 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
   return -weight;
 }
 
+bool CtcPrefixWfstBeamSearch::WordIsStartOfWord(const std::string& word) {
+  return word.size() >= space_symbol_.size() && word.substr(0, 3) == space_symbol_;
+}
+
 bool CtcPrefixWfstBeamSearch::IdIsStartOfWord(int id) {
   auto word_piece = unit_table_->Find(id);
-  return word_piece.size() > space_symbol_.size()
-    && std::equal(space_symbol_.begin(), space_symbol_.end(), word_piece.begin());
+  return WordIsStartOfWord(word_piece);
 }
 
 std::string CtcPrefixWfstBeamSearch::IdsToString(const std::vector<int> ids, int extra_id, int max_length) {
@@ -290,6 +336,129 @@ std::string CtcPrefixWfstBeamSearch::IdsToString(const std::vector<int> ids, int
     word = word.substr(word.size() - max_length);
   }
   return word;
+}
+
+// Build dictionary trie of the words, in terms of characters.
+std::unique_ptr<fst::StdVectorFst> BuildCharacterDictionaryTrie(const fst::SymbolTable& word_table) {
+  fst::StdVectorFst dictionary;
+  auto start = dictionary.AddState();
+  CHECK_EQ(start, 0);
+  dictionary.SetStart(start);
+
+  // std::unordered_set<std::string> all_characters;
+  // for (fst::SymbolTableIterator it(word_table); !it.Done(); it.Next()) {
+  //   const auto& word = it.Symbol();
+  //   std::vector<std::string> chars;
+  //   SplitUTF8StringToChars(word, &chars);
+  //   all_characters.insert(chars.begin(), chars.end());
+  // }
+  // std::vector<std::string> sorted_characters(all_characters.begin(), all_characters.end());
+  // std::sort(sorted_characters.begin(), sorted_characters.end());
+  // std::unordered_map<std::string, int> character_to_id;
+  // for (int i = 0; i < sorted_characters.size(); ++i) {
+  //   character_to_id[sorted_characters[i]] = i;
+  // }
+
+  fst::SymbolTable character_table;
+  character_table.AddSymbol("<eps>", 0);
+  for (fst::SymbolTableIterator it(word_table); !it.Done(); it.Next()) {
+    const auto& word = it.Symbol();
+    std::vector<std::string> chars;
+    SplitUTF8StringToChars(word, &chars);
+    if (!std::all_of(chars.begin(), chars.end(), CheckEnglishChar)) continue;
+    auto current_state = start;
+    auto word_id = it.Value();
+    for (const auto& c : chars) {
+      auto next_state = dictionary.AddState();
+      auto character_id = character_table.Find(c);
+      if (character_id == fst::SymbolTable::kNoSymbol) {
+        character_id = character_table.AddSymbol(c);
+      }
+      // dictionary.AddArc(current_state, fst::StdArc(character_id, character_id, 0, next_state));
+      dictionary.AddArc(current_state, fst::StdArc(character_id, word_id, 0, next_state));
+      word_id = 0;  // Epsilon for all but the first arc.
+      current_state = next_state;
+    }
+    dictionary.SetFinal(current_state, fst::StdArc::Weight::One());
+  }
+
+  // fst::RmEpsilon(&dictionary);
+  auto final_dictionary = std::make_unique<fst::StdVectorFst>();
+  // fst::Determinize(dictionary, final_dictionary.get());
+  fst::ArcSort(&dictionary, fst::ILabelCompare<fst::StdArc>());
+  fst::DeterminizeStar(dictionary, final_dictionary.get());  // Standard Determinize messes up output symbols.
+  // fst::Minimize(final_dictionary.get());
+  fst::MinimizeEncoded(final_dictionary.get());
+  // final_dictionary.reset(dictionary.Copy());
+  fst::ArcSort(final_dictionary.get(), fst::ILabelCompare<fst::StdArc>());
+  final_dictionary->SetInputSymbols(&character_table);
+  return final_dictionary;
+}
+
+// Build dictionary trie of the words, in terms of units.
+void CtcPrefixWfstBeamSearch::BuildUnitDictionaryTrie() {
+  auto character_dictionary = BuildCharacterDictionaryTrie(*word_table_);
+  auto character_table = character_dictionary->InputSymbols();
+  CHECK_NE(character_table, static_cast<const fst::SymbolTable*>(nullptr));
+
+  fst::StdVectorFst unit_to_chars_fst;
+  auto start = unit_to_chars_fst.AddState();
+  CHECK_EQ(start, 0);
+  unit_to_chars_fst.SetStart(start);
+
+  for (fst::SymbolTableIterator it(*unit_table_); !it.Done(); it.Next()) {
+    const auto& unit = it.Symbol();
+    if (unit == "<blank>") CHECK_EQ(it.Value(), 0);  // GetFstScore() assumes it will not receive the blank symbol, so it can use 0 for epsilon.
+    if (unit.substr(0, 1) == "<") continue;
+    std::vector<std::string> unit_chars;
+    SplitUTF8StringToChars(unit, &unit_chars);
+
+    auto current_state = start;
+    auto unit_id = it.Value();
+    auto broke = true;
+    for (const auto& c : unit_chars) {
+      if (c == space_symbol_) continue;
+      auto character_id = character_table->Find(c);
+      if (character_id == fst::SymbolTable::kNoSymbol) {
+        LOG(WARNING) << "Character " << c << " not found in character table. Skipping unit " << unit;
+        broke = true;
+        break;
+      }
+
+      auto next_state = unit_to_chars_fst.AddState();
+      // unit_to_chars_fst.AddArc(current_state, fst::StdArc(character_id, character_id, 0, next_state));
+      unit_to_chars_fst.AddArc(current_state, fst::StdArc(unit_id, character_id, 0, next_state));
+      unit_id = 0;  // Epsilon for all but the first arc.
+      current_state = next_state;
+      broke = false;
+    }
+
+    if (!broke) {
+      unit_to_chars_fst.SetFinal(current_state, fst::StdArc::Weight::One());
+      unit_to_chars_fst.AddArc(current_state, fst::StdArc(0, 0, 0, start));  // Loop back to start, to accept a series of units.
+    }
+    if (it.Value() >= 100) break;
+  }
+
+  unit_to_chars_fst.Write("/home/daz/tmp/dictionary_trie_raw_unit_to_chars_fst.fst");
+  character_dictionary->Write("/home/daz/tmp/dictionary_trie_raw_character_dictionary.fst");
+  character_table->WriteText("/home/daz/tmp/dictionary_trie_raw_character_table.syms.txt");
+  fst::ArcSort(&unit_to_chars_fst, fst::OLabelCompare<fst::StdArc>());
+  fst::StdVectorFst composed_fst;
+  fst::Compose(unit_to_chars_fst, *character_dictionary, &composed_fst);
+  composed_fst.Write("/home/daz/tmp/dictionary_trie_raw.fst");
+  fst::Connect(&composed_fst);
+  // fst::RmEpsilon(&composed_fst);
+  auto final_dictionary = std::make_unique<fst::StdVectorFst>();
+  // fst::Determinize(composed_fst, final_dictionary.get());
+  fst::ArcSort(&composed_fst, fst::ILabelCompare<fst::StdArc>());
+  fst::DeterminizeStar(composed_fst, final_dictionary.get());
+  fst::MinimizeEncoded(final_dictionary.get());
+  fst::ArcSort(final_dictionary.get(), fst::ILabelCompare<fst::StdArc>());
+  final_dictionary->Write("/home/daz/tmp/dictionary_trie.fst");
+
+  dictionary_trie_fst_ = std::move(final_dictionary);
+  dictionary_trie_matcher_ = std::make_unique<fst::SortedMatcher<fst::StdFst>>(*dictionary_trie_fst_, fst::MATCH_INPUT);
 }
 
 // TODO:
