@@ -41,6 +41,7 @@ struct WfstPrefixScore {
 
   StateId fst_state = fst::kNoStateId;
   StateId dictionary_fst_state = fst::kNoStateId;
+  int prefix_word_id = fst::kNoLabel;
   bool is_in_grammar = true;
 
   void set_fst_state(StateId state) {
@@ -138,6 +139,7 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   bool WordIsStartOfWord(const std::string& word);
   bool IdIsStartOfWord(int id);
   std::string IdsToString(const std::vector<int> ids, int extra_id = -1, int max_len = -1);
+  std::unique_ptr<fst::StdVectorFst> BuildCharacterDictionaryTrie(const fst::SymbolTable& word_table);
   void BuildUnitDictionaryTrie();
 
  public:
