@@ -54,6 +54,43 @@ static bool PrefixScoreCompare(
   return a.second.score() > b.second.score();
 }
 
+PrefixScore& GetNextHyp(std::unordered_map<std::vector<int>, PrefixScore, PrefixHash>& next_hyps, const std::vector<int>& prefix, const PrefixScore& current_score) {
+  // next_hyps is initialized empty at the beginning of each time stamp, so each of its prefix_scores are only generated for/in the current time stamp.
+  // The prefix_scores inherit their scores (and other data) exclusively from prefix_scores from the previous time stamp (no data from others in the current time stamp).
+  // Obviously all prefix_scores for a given prefix represent that same prefix, but they may have taken different paths to get there.
+  PrefixScore& next_score = next_hyps[prefix];
+  // FIXME: should we only copy over states if it is newly inserted?
+  if (current_score.fst_state != next_score.fst_state) {
+    if (next_score.fst_state == fst::kNoStateId) {
+      next_score.set_fst_state(current_score.fst_state);
+    } else if (current_score.fst_state != fst::kNoStateId) {
+      LOG(FATAL) << "prefix_score.fst_state mismatch: " << current_score.fst_state << " vs. " << next_score.fst_state;
+    }
+  }
+  if (current_score.dictionary_fst_state != next_score.dictionary_fst_state) {
+    if (next_score.dictionary_fst_state == fst::kNoStateId) {
+      next_score.dictionary_fst_state = current_score.dictionary_fst_state;
+    } else if (current_score.dictionary_fst_state != fst::kNoStateId) {
+      LOG(FATAL) << "prefix_score.dictionary_fst_state mismatch: " << current_score.dictionary_fst_state << " vs. " << next_score.dictionary_fst_state;
+    }
+  }
+  if (current_score.prefix_word_id != next_score.prefix_word_id) {
+    if (next_score.prefix_word_id == fst::kNoLabel) {
+      next_score.prefix_word_id = current_score.prefix_word_id;
+    } else if (current_score.prefix_word_id != fst::kNoLabel) {
+      LOG(FATAL) << "prefix_score.prefix_word_id mismatch: " << current_score.prefix_word_id << " vs. " << next_score.prefix_word_id;
+    }
+  }
+  if (current_score.is_in_grammar != next_score.is_in_grammar) {
+    if (next_score.is_in_grammar == true) {
+      next_score.is_in_grammar = current_score.is_in_grammar;
+    } else if (current_score.is_in_grammar != true) {
+      LOG(FATAL) << "prefix_score.is_in_grammar mismatch: " << current_score.is_in_grammar << " vs. " << next_score.is_in_grammar;
+    }
+  }
+  return next_score;
+}
+
 // Please refer https://robin1001.github.io/2020/12/11/ctc-search
 // for how CTC prefix beam search works, and there is a simple graph demo in it.
 void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
@@ -87,34 +124,37 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
         // of PrefixScore will set fields s(blank ending score) and
         // ns(none blank ending score) to -inf, respectively.
 
-        static std::string target_string = "▁I'D▁LIKE▁TO▁SHARE▁WITH▁YOU▁A▁DISCOVERY▁THAT▁I▁MADE▁A▁FEW▁MONTHS▁AGO▁WHILE▁WRITING▁AN▁ARTICLE▁FOR▁ITALIAN▁WIRED▁I▁ALWAYS▁KEEP▁MY▁THESAURUS▁HANDY▁WHENEVER▁I'M▁WRITING▁ANYTHING▁BUT";
-        std::vector<int> new_prefix(prefix);
-        if (id != opts_.blank) new_prefix.emplace_back(id);
-        std::string new_prefix_string = IdsToString(new_prefix);
-        if (new_prefix_string == target_string.substr(0, new_prefix_string.size())) {
-          VLOG(2) << "new_prefix_string: " << new_prefix_string;
-          if (!verbose && new_prefix_string.size() >= 150) {
-            // VLOG(1) << "!!!!";
-            verbose = true;
+        if (true) {
+          static std::string target_string = "▁I'D▁LIKE▁TO▁SHARE▁WITH▁YOU▁A▁DISCOVERY▁THAT▁I▁MADE▁A▁FEW▁MONTHS▁AGO▁WHILE▁WRITING▁AN▁ARTICLE▁FOR▁ITALIAN▁WIRED▁I▁ALWAYS▁KEEP▁MY▁THESAURUS▁HANDY▁WHENEVER▁I'M▁WRITING▁ANYTHING▁BUT";
+          std::vector<int> new_prefix(prefix);
+          if (id != opts_.blank) new_prefix.emplace_back(id);
+          std::string new_prefix_string = IdsToString(new_prefix);
+          if (new_prefix_string == target_string.substr(0, new_prefix_string.size())) {
+            VLOG(2) << "new_prefix_string: " << new_prefix_string;
+            if (!verbose && new_prefix_string.size() >= 150) {
+              // VLOG(1) << "!!!!";
+              verbose = true;
+            }
+          }
+          if (new_prefix_string.substr(0, 6) == "▁BUT") {
+            VLOG(2) << "new_prefix_string: " << new_prefix_string;
           }
         }
 
         if (id == opts_.blank) {
           // Case 0: *a + ε => *a
-          // If we propose a blank, the prefix doesn't change. Only the probability of ending in blank gets updated, and the previous character could be either blank or nonblank.
+          // If we propose a blank, the prefix doesn't change. Only the probability of ending in blank gets updated, and the previous character could be either blank or nonblank. Inheritance of prefix_score: *a at time t-1 => *a at time t.
           PrefixScore& next_score = GetNextHyp(next_hyps, prefix, prefix_score);
-          // next_score.set_fst_state(prefix_score.fst_state);
-          next_score.update_at_time(abs_time_step_);
+          next_score.update_stamp("case0("+unit_table_->Find(id)+")@"+std::to_string(abs_time_step_), prefix);
           next_score.s = LogAdd(next_score.s, prefix_score.score() + prob);
           next_score.v_s = prefix_score.viterbi_score() + prob;
           next_score.times_s = prefix_score.times();
 
         } else if (!prefix.empty() && id == prefix.back()) {
           // Case 1: *a + a => *a
-          // If we propose a repeat nonblank, after a nonblank, the prefix doesn't change. Only the probability of ending in nonblank gets updated, and we know the previous character was nonblank.
+          // If we propose a repeat nonblank, after a nonblank, the prefix doesn't change. Only the probability of ending in nonblank gets updated, and we know the previous character was nonblank. Inheritance of prefix_score: *a at time t-1 => *a at time t.
           PrefixScore& next_score1 = GetNextHyp(next_hyps, prefix, prefix_score);
-          // next_score1.set_fst_state(prefix_score.fst_state);
-          next_score1.update_at_time(abs_time_step_);
+          next_score1.update_stamp("case1("+unit_table_->Find(id)+")@"+std::to_string(abs_time_step_), prefix);
           next_score1.ns = LogAdd(next_score1.ns, prefix_score.ns + prob);
           if (next_score1.v_ns < prefix_score.v_ns + prob) {
             next_score1.v_ns = prefix_score.v_ns + prob;
@@ -127,14 +167,15 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
           }
 
           // Case 2: *aε + a => *aa
-          // If we propose a repeat nonblank, after a blank, the prefix does change. Only the probability of ending in nonblank gets updated, and we know the previous character was blank.
+          // If we propose a repeat nonblank, after a blank, the prefix does change. Only the probability of ending in nonblank gets updated, and we know the previous character was blank. Inheritance of prefix_score: *a at time t-1 => *aa at time t.
           std::vector<int> new_prefix(prefix);
           new_prefix.emplace_back(id);
           PrefixScore& next_score2 = GetNextHyp(next_hyps, new_prefix, prefix_score);
-          next_score2.update_at_time(abs_time_step_);
+          next_score2.update_stamp("case2("+unit_table_->Find(id)+")@"+std::to_string(abs_time_step_), new_prefix);
           auto fst_score = GetFstScore(prefix, prefix_score, id, next_score2);
-          if (opts_.strict && fst_score == NoLikelihood) {
+          if (opts_.strict && fst_score <= NoLikelihood) {
             next_hyps.erase(new_prefix);
+            // FIXME: should we not remove if it already existed?
             continue;
           }
           next_score2.ns = LogAdd(next_score2.ns, prefix_score.s + prob + fst_score);
@@ -147,14 +188,15 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
 
         } else {
           // Case 3: *a + b => *ab, *aε + b => *ab
-          // If we propose a non-repeat nonblank, the prefix must change. Only the probability of ending in nonblank gets updated, and the previous character could be either blank or nonblank.
+          // If we propose a non-repeat nonblank, the prefix must change. Only the probability of ending in nonblank gets updated, and the previous character could be either blank or nonblank. Inheritance of prefix_score: *a at time t-1 => *ab at time t.
           std::vector<int> new_prefix(prefix);
           new_prefix.emplace_back(id);
           PrefixScore& next_score = GetNextHyp(next_hyps, new_prefix, prefix_score);
-          next_score.update_at_time(abs_time_step_);
+          next_score.update_stamp("case3("+unit_table_->Find(id)+")@"+std::to_string(abs_time_step_), new_prefix);
           auto fst_score = GetFstScore(prefix, prefix_score, id, next_score);
-          if (opts_.strict && fst_score == NoLikelihood) {
+          if (opts_.strict && fst_score <= NoLikelihood) {
             next_hyps.erase(new_prefix);
+            // FIXME: should we not remove if it already existed?
             continue;
           }
           next_score.ns = LogAdd(next_score.ns, prefix_score.score() + prob + fst_score);
@@ -185,8 +227,11 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
     viterbi_likelihood_.clear();
     times_.clear();
     for (auto& item : arr) {
-      VLOG(1) << "t" << abs_time_step_ << ": " << IdsToString(item.first, -1, 80) << " = " << item.second.score() << "    fst_state=" << item.second.fst_state;
-              // << "    update_times=" << item.second.update_times.size();
+      VLOG(1) << "t" << abs_time_step_ << ": " << IdsToString(item.first, -1, 50) << " = " << item.second.score() << "    fst_state=" << item.second.fst_state
+              // << "    dict_fst_state=" << item.second.dictionary_fst_state
+              // << "    updates=" << item.second.updates.size()
+              << "    updates=" << JoinString(" | ", item.second.updates)
+              ;
       cur_hyps_[item.first] = item.second;
       hypotheses_.emplace_back(std::move(item.first));
       likelihood_.emplace_back(item.second.score());
@@ -197,16 +242,9 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
   }
 }
 
-PrefixScore& CtcPrefixWfstBeamSearch::GetNextHyp(std::unordered_map<std::vector<int>, PrefixScore, PrefixHash>& next_hyps, const std::vector<int>& prefix, const PrefixScore& current_score) {
-  PrefixScore& next_score = next_hyps[prefix];
-  if (next_score.fst_state == fst::kNoStateId) {
-    next_score.set_fst_state(current_score.fst_state);
-  }
-  return next_score;
-}
-
 float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score) {
   if (!current_prefix_score.is_in_grammar) {
+    // FIXME: need to have a way to enable grammar again!
     return FullLikelihood;
   }
 
@@ -226,13 +264,59 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
     }
   }
 
+  // Check whether the completed word fits in the grammar fst.
+  auto check_complete_word = [&](int word_id) {
+    // static std::set<int> seen_word_ids;
+    // if (seen_word_ids.find(word_id) == seen_word_ids.end()) {
+    //   seen_word_ids.insert(word_id);
+    // }
+
+    CHECK_NE(word_id, fst::kNoLabel);
+    auto fst_state = current_prefix_score.fst_state != fst::kNoStateId ? current_prefix_score.fst_state : fst_->Start();
+    matcher_.SetState(fst_state);
+    if (true && matcher_.Find(0)) {
+      VLOG(0) << "    found epsilon";
+    }
+    if (true && matcher_.Find(dictation_lexiconfree_state_)) {
+      VLOG(1) << "    found dictation_lexiconfree_state_";
+      next_prefix_score.is_in_grammar = false;
+    }
+    else if (!matcher_.Find(word_id)) {
+      VLOG(3) << "    return: not found at fst_state " << fst_state;
+      return NoLikelihood;
+    }
+
+    auto weight = matcher_.Value().weight.Value();
+    auto nextstate = matcher_.Value().nextstate;
+
+    CHECK((matcher_.Next(), matcher_.Done()));
+    // matcher_.Next();
+    // CHECK(matcher_.Done());
+    // for (matcher_.Next(); !matcher_.Done(); matcher_.Next()) {
+    //   auto weight = matcher_.Value().weight.Value();
+    //   auto nextstate = matcher_.Value().nextstate;
+    //   LOG(FATAL) << "GetFstScore num_arcs>1: weight=" << weight << " nextstate=" << nextstate;
+    // }
+
+    VLOG(1) << "    " << IdsToString(current_prefix, id) << " : fst_state " << next_prefix_score.fst_state << " -> " << nextstate;
+    next_prefix_score.set_fst_state(nextstate);
+    return -weight;
+  };
+
+  // Either handle partial word prefixes, or only complete words.
   int word_id = fst::kNoLabel;
-  if (true) {
+  if (false) {
+    float final_weight = FullLikelihood;
     if (!current_prefix.empty() && IdIsStartOfWord(id)) {
-      // We have now completed the previous prefix word.
-      CHECK_NE(dictionary_trie_fst_->Final(current_prefix_score.dictionary_fst_state), fst::StdArc::Weight::Zero());
+      // We have now completed the previous prefix word. We must have ended the dictionary in a final state. Then we check the completed word.
+      // CHECK_NE(dictionary_trie_fst_->Final(current_prefix_score.dictionary_fst_state), fst::StdArc::Weight::Zero());
+      CHECK_NE(current_prefix_score.dictionary_fst_state, fst::kNoStateId);
+      if (dictionary_trie_fst_->Final(current_prefix_score.dictionary_fst_state) == fst::StdArc::Weight::Zero()) {
+        VLOG(3) << "    return: completed word not in dictionary (though it was a valid prefix)";
+        return NoLikelihood;
+      }
       word_id = current_prefix_score.prefix_word_id;
-      // Check it!!!
+      final_weight = final_weight + check_complete_word(word_id);
     }
 
     // Check whether the current partial word prefix could be a word in the dictionary.
@@ -241,7 +325,7 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
     matcher.SetState(dictionary_fst_state);
     if (!matcher.Find(id)) {
       VLOG(3) << "    return: partial word prefix not in dictionary";
-      return NoLikelihood;
+      return final_weight + NoLikelihood;
     }
     auto olabel = matcher.Value().olabel;
     auto nextstate = matcher.Value().nextstate;
@@ -266,7 +350,7 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
     // }
     // Now guaranteed to be a word in the word table. But adding more units after this one may not be a word, so we must wait for a space character before officially moving forward.
     VLOG(3) << "    return: partial word prefix okay so far, but not a guaranteed-completed word yet";
-    return FullLikelihood;
+    return final_weight + FullLikelihood;
 
   } else {
     if (current_prefix.empty() || !IdIsStartOfWord(id)) {
@@ -291,41 +375,10 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
       VLOG(3) << "    return: not in word_table_";
       return NoLikelihood;
     }
-  }
 
-  // static std::set<int> seen_word_ids;
-  // if (seen_word_ids.find(word_id) == seen_word_ids.end()) {
-  //   seen_word_ids.insert(word_id);
-  // }
-
-  // Check whether the completed word fits in the grammar fst.
-  CHECK_NE(word_id, fst::kNoLabel);
-  auto fst_state = current_prefix_score.fst_state != fst::kNoStateId ? current_prefix_score.fst_state : fst_->Start();
-  matcher_.SetState(fst_state);
-  if (true && matcher_.Find(0)) {
-    VLOG(0) << "    found epsilon";
+    return check_complete_word(word_id);
   }
-  if (true && matcher_.Find(dictation_lexiconfree_state_)) {
-    VLOG(0) << "    found dictation_lexiconfree_state_";
-    next_prefix_score.is_in_grammar = false;
-  }
-  else if (!matcher_.Find(word_id)) {
-    VLOG(3) << "    return: not found at fst_state " << fst_state;
-    return NoLikelihood;
-  }
-
-  auto weight = matcher_.Value().weight.Value();
-  auto nextstate = matcher_.Value().nextstate;
-
-  for (matcher_.Next(); !matcher_.Done(); matcher_.Next()) {
-    auto weight = matcher_.Value().weight.Value();
-    auto nextstate = matcher_.Value().nextstate;
-    LOG(FATAL) << "GetFstScore num_arcs>1: weight=" << weight << " nextstate=" << nextstate;
-  }
-
-  VLOG(1) << "    " << IdsToString(current_prefix, id) << " : fst_state " << next_prefix_score.fst_state << " -> " << nextstate;
-  next_prefix_score.set_fst_state(nextstate);
-  return -weight;
+  LOG(FATAL) << "We should never get here.";
 }
 
 bool CtcPrefixWfstBeamSearch::WordIsStartOfWord(const std::string& word) {

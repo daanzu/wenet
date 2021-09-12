@@ -21,6 +21,8 @@ namespace wenet {
 using TorchModule = torch::jit::script::Module;
 using Tensor = torch::Tensor;
 using StateId = fst::StdFst::StateId;
+using Label = fst::StdArc::Label;
+using Weight = fst::StdArc::Weight::ValueType;
 
 struct CtcPrefixWfstBeamSearchOptions {
   int blank = 0;  // blank id
@@ -41,7 +43,7 @@ struct WfstPrefixScore {
 
   StateId fst_state = fst::kNoStateId;
   StateId dictionary_fst_state = fst::kNoStateId;
-  int prefix_word_id = fst::kNoLabel;
+  Label prefix_word_id = fst::kNoLabel;
   bool is_in_grammar = true;
 
   void set_fst_state(StateId state) {
@@ -55,9 +57,9 @@ struct WfstPrefixScore {
     fst_state = state;
   }
 
-  std::vector<int> update_times;
-  void update_at_time(int time) {
-    update_times.push_back(time);
+  std::vector<std::string> updates;
+  void update_stamp(std::string str, std::vector<int> prefix) {
+    updates.push_back(str);
   }
 
   WfstPrefixScore() = default;
@@ -134,7 +136,6 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   const std::string space_symbol_ = kSpaceSymbol;
   const StateId dictation_lexiconfree_state_ = fst::kNoStateId;
 
-  PrefixScore& GetNextHyp(std::unordered_map<std::vector<int>, PrefixScore, PrefixHash>& next_hyps, const std::vector<int>& prefix, const PrefixScore& current_score);
   float GetFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score);
   bool WordIsStartOfWord(const std::string& word);
   bool IdIsStartOfWord(int id);
