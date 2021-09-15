@@ -56,8 +56,9 @@ static bool PrefixScoreCompare(
 
 PrefixScore& GetNextHyp(std::unordered_map<std::vector<int>, PrefixScore, PrefixHash>& next_hyps, const std::vector<int>& prefix, const PrefixScore& current_score) {
   // next_hyps is initialized empty at the beginning of each time stamp, so each of its prefix_scores are only generated for/in the current time stamp.
-  // The prefix_scores inherit their scores (and other data) exclusively from prefix_scores from the previous time stamp (no data from others in the current time stamp).
+  // The prefix_scores inherit their scores (and other state data) exclusively from prefix_scores from the previous time stamp (no data from others in the current time stamp).
   // Obviously all prefix_scores for a given prefix represent that same prefix, but they may have taken different paths to get there.
+  // Inheritance (backward-looking) of prefix_score???
   PrefixScore& next_score = next_hyps[prefix];
   // FIXME: should we only copy over states if it is newly inserted?
   if (current_score.fst_state != next_score.fst_state) {
@@ -119,10 +120,9 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
         const std::vector<int>& prefix = it.first;
         const PrefixScore& prefix_score = it.second;
 
-        // If prefix doesn't exist in next_hyps, next_hyps[prefix] will insert
-        // PrefixScore(-inf, -inf) by default, since the default constructor
-        // of PrefixScore will set fields s(blank ending score) and
-        // ns(none blank ending score) to -inf, respectively.
+        // If prefix doesn't exist in next_hyps, next_hyps[prefix] will insert PrefixScore(-inf, -inf) by default, since the default constructor of PrefixScore will set fields s(blank ending score) and ns(none blank ending score) to -inf, respectively.
+        // Cases 0 and 1: Prefix is unchanged, so don't modify the fst states.
+        // Cases 2 and 3: Prefix is extended by a single unit, so modify the fst states. These cases are mutually exclusive for a given prefix & unit.
 
         if (true) {
           static std::string target_string = "▁I'D▁LIKE▁TO▁SHARE▁WITH▁YOU▁A▁DISCOVERY▁THAT▁I▁MADE▁A▁FEW▁MONTHS▁AGO▁WHILE▁WRITING▁AN▁ARTICLE▁FOR▁ITALIAN▁WIRED▁I▁ALWAYS▁KEEP▁MY▁THESAURUS▁HANDY▁WHENEVER▁I'M▁WRITING▁ANYTHING▁BUT";
@@ -143,7 +143,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
 
         if (id == opts_.blank) {
           // Case 0: *a + ε => *a
-          // If we propose a blank, the prefix doesn't change. Only the probability of ending in blank gets updated, and the previous character could be either blank or nonblank. Inheritance of prefix_score: *a at time t-1 => *a at time t.
+          // If we propose a blank, the prefix doesn't change. Only the probability of ending in blank gets updated, and the previous character could be either blank or nonblank. Progression of prefix_score: *a at time t-1 => *a at time t.
           PrefixScore& next_score = GetNextHyp(next_hyps, prefix, prefix_score);
           next_score.update_stamp("case0("+unit_table_->Find(id)+")@"+std::to_string(abs_time_step_), prefix);
           next_score.s = LogAdd(next_score.s, prefix_score.score() + prob);
@@ -152,7 +152,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
 
         } else if (!prefix.empty() && id == prefix.back()) {
           // Case 1: *a + a => *a
-          // If we propose a repeat nonblank, after a nonblank, the prefix doesn't change. Only the probability of ending in nonblank gets updated, and we know the previous character was nonblank. Inheritance of prefix_score: *a at time t-1 => *a at time t.
+          // If we propose a repeat nonblank, after a nonblank, the prefix doesn't change. Only the probability of ending in nonblank gets updated, and we know the previous character was nonblank. Progression of prefix_score: *a at time t-1 => *a at time t.
           PrefixScore& next_score1 = GetNextHyp(next_hyps, prefix, prefix_score);
           next_score1.update_stamp("case1("+unit_table_->Find(id)+")@"+std::to_string(abs_time_step_), prefix);
           next_score1.ns = LogAdd(next_score1.ns, prefix_score.ns + prob);
@@ -167,7 +167,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
           }
 
           // Case 2: *aε + a => *aa
-          // If we propose a repeat nonblank, after a blank, the prefix does change. Only the probability of ending in nonblank gets updated, and we know the previous character was blank. Inheritance of prefix_score: *a at time t-1 => *aa at time t.
+          // If we propose a repeat nonblank, after a blank, the prefix does change. Only the probability of ending in nonblank gets updated, and we know the previous character was blank. Progression of prefix_score: *a at time t-1 => *aa at time t.
           std::vector<int> new_prefix(prefix);
           new_prefix.emplace_back(id);
           PrefixScore& next_score2 = GetNextHyp(next_hyps, new_prefix, prefix_score);
@@ -188,7 +188,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
 
         } else {
           // Case 3: *a + b => *ab, *aε + b => *ab
-          // If we propose a non-repeat nonblank, the prefix must change. Only the probability of ending in nonblank gets updated, and the previous character could be either blank or nonblank. Inheritance of prefix_score: *a at time t-1 => *ab at time t.
+          // If we propose a non-repeat nonblank, the prefix must change. Only the probability of ending in nonblank gets updated, and the previous character could be either blank or nonblank. Progression of prefix_score: *a at time t-1 => *ab at time t.
           std::vector<int> new_prefix(prefix);
           new_prefix.emplace_back(id);
           PrefixScore& next_score = GetNextHyp(next_hyps, new_prefix, prefix_score);
@@ -243,6 +243,8 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
 }
 
 float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score) {
+  // Note: We are never called with the blank unit id.
+
   if (!current_prefix_score.is_in_grammar) {
     // FIXME: need to have a way to enable grammar again!
     return FullLikelihood;
