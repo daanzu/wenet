@@ -29,6 +29,7 @@ struct CtcPrefixWfstBeamSearchOptions {
   int first_beam_size = 10;
   int second_beam_size = 10;
   bool strict = true;
+  bool process_partial_word_prefixes = true;
 };
 
 // Represents everything for a single Prefix, which is a sequence of regularized CTC labels, and so can only grow monotonically.
@@ -41,24 +42,32 @@ struct WfstPrefixScore {
   std::vector<int> times_s;           // times of viterbi blank path
   std::vector<int> times_ns;          // times of viterbi none blank path
 
+  bool inheriter = false;
   StateId fst_state = fst::kNoStateId;
+  bool is_in_grammar = true;
   StateId dictionary_fst_state = fst::kNoStateId;
   Label prefix_word_id = fst::kNoLabel;
-  bool is_in_grammar = true;
 
-  void set_fst_state(StateId state) {
-    if (fst_state != fst::kNoStateId) {
+  void SetFstState(StateId state) {
+    // if (fst_state != fst::kNoStateId) {
       // LOG(FATAL) << "fst_state is already set";
       // if (fst_state != state) {
-      if (fst_state > state) {
-        LOG(FATAL) << "fst_state is already set to " << fst_state << " not " << state;
-      }
-    }
+      // if (fst_state > state) {
+      //   LOG(FATAL) << "fst_state is already set to " << fst_state << " not " << state;
+      // }
+    // }
     fst_state = state;
   }
 
+  bool StatesEqual(const WfstPrefixScore& other) const {
+    return fst_state == other.fst_state
+      && dictionary_fst_state == other.dictionary_fst_state
+      && prefix_word_id == other.prefix_word_id
+      && is_in_grammar == other.is_in_grammar;
+  }
+
   std::vector<std::string> updates;
-  void update_stamp(std::string str, std::vector<int> prefix) {
+  void UpdateStamp(std::string str, std::vector<int> prefix) {
     updates.push_back(str);
   }
 
