@@ -61,9 +61,9 @@ struct WfstPrefixScore {
 
   bool StatesEqual(const WfstPrefixScore& other) const {
     return fst_state == other.fst_state
+      && is_in_grammar == other.is_in_grammar
       && dictionary_fst_state == other.dictionary_fst_state
-      && prefix_word_id == other.prefix_word_id
-      && is_in_grammar == other.is_in_grammar;
+      && prefix_word_id == other.prefix_word_id;
   }
 
   std::vector<std::string> updates;
@@ -135,11 +135,11 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
 
   const CtcPrefixWfstBeamSearchOptions& opts_;
 
-  std::shared_ptr<fst::StdFst> fst_;
-  fst::ExplicitMatcher<fst::SortedMatcher<fst::StdFst>> matcher_;
+  std::shared_ptr<fst::StdFst> grammar_fst_;
+  fst::ExplicitMatcher<fst::SortedMatcher<fst::StdFst>> grammar_matcher_;
   std::shared_ptr<fst::SymbolTable> word_table_;
   std::shared_ptr<fst::SymbolTable> unit_table_;
-  std::unique_ptr<fst::StdFst> dictionary_trie_fst_;
+  std::unique_ptr<fst::StdFst> dictionary_trie_fst_;  // unit->word transducer
   std::unique_ptr<fst::SortedMatcher<fst::StdFst>> dictionary_trie_matcher_;
 
   const std::string space_symbol_ = kSpaceSymbol;
