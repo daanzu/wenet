@@ -95,6 +95,7 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
 
   using PrefixScore = WfstPrefixScore;
   using PrefixHash = WfstPrefixHash;
+  using Matcher = fst::ExplicitMatcher<fst::SortedMatcher<fst::Fst<fst::StdArc>>>;
 
   void Search(const torch::Tensor& logp) override;
   void Reset() override;
@@ -135,16 +136,16 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   const CtcPrefixWfstBeamSearchOptions& opts_;
 
   std::shared_ptr<fst::StdFst> grammar_fst_;
-  fst::ExplicitMatcher<fst::SortedMatcher<fst::StdFst>> grammar_matcher_;
+  Matcher grammar_matcher_;
   std::shared_ptr<fst::SymbolTable> word_table_;
   std::shared_ptr<fst::SymbolTable> unit_table_;
   std::unique_ptr<fst::StdFst> dictionary_trie_fst_;  // unit->word transducer
-  std::unique_ptr<fst::ExplicitMatcher<fst::SortedMatcher<fst::StdFst>>> dictionary_trie_matcher_;
+  std::unique_ptr<Matcher> dictionary_trie_matcher_;
 
   const std::string space_symbol_ = kSpaceSymbol;
   const fst::StdArc::StateId dictation_lexiconfree_state_ = fst::kNoStateId;
 
-  float GetFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score);
+  float ComputeFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score);
   bool WordIsStartOfWord(const std::string& word);
   bool IdIsStartOfWord(int id);
   std::string IdsToString(const std::vector<int> ids, int extra_id = -1, int max_len = -1);
