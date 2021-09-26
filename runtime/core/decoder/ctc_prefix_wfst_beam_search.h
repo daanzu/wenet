@@ -43,24 +43,24 @@ struct WfstPrefixScore {
   std::vector<int> times_ns;          // times of viterbi none blank path
 
   bool inheriter = false;
-  StateId fst_state = fst::kNoStateId;
+  StateId grammar_fst_state = fst::kNoStateId;
   bool is_in_grammar = true;
   StateId dictionary_fst_state = fst::kNoStateId;
   Label prefix_word_id = fst::kNoLabel;
 
   void SetFstState(StateId state) {
-    // if (fst_state != fst::kNoStateId) {
-      // LOG(FATAL) << "fst_state is already set";
-      // if (fst_state != state) {
-      // if (fst_state > state) {
-      //   LOG(FATAL) << "fst_state is already set to " << fst_state << " not " << state;
+    // if (grammar_fst_state != fst::kNoStateId) {
+      // LOG(FATAL) << "grammar_fst_state is already set";
+      // if (grammar_fst_state != state) {
+      // if (grammar_fst_state > state) {
+      //   LOG(FATAL) << "grammar_fst_state is already set to " << grammar_fst_state << " not " << state;
       // }
     // }
-    fst_state = state;
+    grammar_fst_state = state;
   }
 
   bool StatesEqual(const WfstPrefixScore& other) const {
-    return fst_state == other.fst_state
+    return grammar_fst_state == other.grammar_fst_state
       && is_in_grammar == other.is_in_grammar
       && dictionary_fst_state == other.dictionary_fst_state
       && prefix_word_id == other.prefix_word_id;
@@ -140,7 +140,7 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   std::shared_ptr<fst::SymbolTable> word_table_;
   std::shared_ptr<fst::SymbolTable> unit_table_;
   std::unique_ptr<fst::StdFst> dictionary_trie_fst_;  // unit->word transducer
-  std::unique_ptr<fst::SortedMatcher<fst::StdFst>> dictionary_trie_matcher_;
+  std::unique_ptr<fst::ExplicitMatcher<fst::SortedMatcher<fst::StdFst>>> dictionary_trie_matcher_;
 
   const std::string space_symbol_ = kSpaceSymbol;
   const StateId dictation_lexiconfree_state_ = fst::kNoStateId;

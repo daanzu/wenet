@@ -25,6 +25,8 @@ constexpr float SuperNoLikelihood = -std::numeric_limits<float>::infinity();
 constexpr float NoLikelihood = -std::numeric_limits<float>::max();
 constexpr float FullLikelihood = 0.0f;
 
+std::string target_string_ = "▁I'D▁LIKE▁TO▁SHARE▁WITH▁YOU▁A▁DISCOVERY▁THAT▁I▁MADE▁A▁FEW▁MONTHS▁AGO▁WHILE▁WRITING▁AN▁ARTICLE▁FOR▁ITALIAN▁WIRED▁I▁ALWAYS▁KEEP▁MY▁THESAURUS▁HANDY▁WHENEVER▁I'M▁WRITING▁ANYTHING▁BUT";
+
 CtcPrefixWfstBeamSearch::CtcPrefixWfstBeamSearch(std::shared_ptr<fst::StdFst> fst, std::shared_ptr<fst::SymbolTable> word_table, std::shared_ptr<fst::SymbolTable> unit_table, const CtcPrefixWfstBeamSearchOptions& opts)
     : opts_(opts), grammar_fst_(fst), grammar_matcher_(*grammar_fst_, fst::MATCH_INPUT), word_table_(word_table), unit_table_(unit_table),
       dictation_lexiconfree_state_(word_table->Find("#NONTERM:DICTATION_LEXICONFREE")) {
@@ -64,7 +66,7 @@ PrefixScore& GetNextHyp(std::unordered_map<std::vector<int>, PrefixScore, Prefix
   // If the prefix_score for the prefix was just created above (and thus has not inherited yet), then inherit States from the current prefix_score.
   if (!next_score.inheriter) {
     next_score.inheriter = true;
-    next_score.SetFstState(current_score.fst_state);
+    next_score.SetFstState(current_score.grammar_fst_state);
     next_score.dictionary_fst_state = current_score.dictionary_fst_state;
     next_score.prefix_word_id = current_score.prefix_word_id;
     next_score.is_in_grammar = current_score.is_in_grammar;
@@ -110,11 +112,10 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
         // Each case only updates either .s or .ns, never both, because it is only handling a single unit. However, multiple cases can update the same prefix_score at the same time.
 
         if (false) {
-          static std::string target_string = "▁I'D▁LIKE▁TO▁SHARE▁WITH▁YOU▁A▁DISCOVERY▁THAT▁I▁MADE▁A▁FEW▁MONTHS▁AGO▁WHILE▁WRITING▁AN▁ARTICLE▁FOR▁ITALIAN▁WIRED▁I▁ALWAYS▁KEEP▁MY▁THESAURUS▁HANDY▁WHENEVER▁I'M▁WRITING▁ANYTHING▁BUT";
           std::vector<int> new_prefix(prefix);
           if (id != opts_.blank) new_prefix.emplace_back(id);
           std::string new_prefix_string = IdsToString(new_prefix);
-          if (new_prefix_string == target_string.substr(0, new_prefix_string.size())) {
+          if (new_prefix_string == target_string_.substr(0, new_prefix_string.size())) {
             VLOG(2) << "new_prefix_string: " << new_prefix_string;
             if (!verbose && new_prefix_string.size() >= 150) {
               // VLOG(1) << "!!!!";
@@ -214,7 +215,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
     viterbi_likelihood_.clear();
     times_.clear();
     for (auto& item : arr) {
-      VLOG(1) << "end t" << abs_time_step_ << ": " << IdsToString(item.first, -1, 50) << " = " << item.second.score() << "    fst_state=" << item.second.fst_state
+      VLOG(1) << "end t" << abs_time_step_ << ": " << IdsToString(item.first, -1, 50) << " = " << item.second.score() << "    grammar_fst_state=" << item.second.grammar_fst_state
               // << "    dict_fst_state=" << item.second.dictionary_fst_state
               // << "    updates=" << item.second.updates.size()
               // << "    updates=" << JoinString(" | ", item.second.updates)
@@ -227,6 +228,70 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
     }
     VLOG(1) << "";
   }
+}
+
+// Check whether there is an epsilon-path from start_state to a state with an arc with the given ilabel.
+template <class Arc>
+bool CheckIfEpsilonPathToILabel(fst::ExplicitMatcher<fst::SortedMatcher<fst::Fst<Arc>>>& matcher, typename Arc::StateId start_state, typename Arc::Label ilabel) {
+  auto& fst = matcher.GetFst();
+  while (start_state != fst::kNoStateId) {
+    matcher.SetState(start_state);
+    if (matcher.Find(ilabel)) {
+      return true;
+    }
+    if (!matcher.Find(0)) {
+      return false;
+    }
+    start_state = matcher.Value().nextstate;
+    CHECK((matcher.Next(), matcher.Done()));  // Should only have at most one epsilon to follow.
+  }
+  return false;
+}
+
+// DFS traversal to find a final state, following only epsilon transitions. Should be sufficient since FST should be deterministic, so only one path to follow.
+template <class Arc>
+typename Arc::StateId FindFinalState(fst::ExplicitMatcher<fst::SortedMatcher<fst::Fst<Arc>>>& matcher, typename Arc::StateId start_state) {
+  auto& fst = matcher.GetFst();
+  while (start_state != fst::kNoStateId) {
+    if (fst.Final(start_state) != Arc::Weight::Zero()) {
+      return start_state;
+    }
+    matcher.SetState(start_state);
+    if (!matcher.Find(0)) {
+      return fst::kNoStateId;
+    }
+    start_state = matcher.Value().nextstate;
+    CHECK((matcher.Next(), matcher.Done()));  // Should only have at most one epsilon to follow.
+  }
+  return fst::kNoStateId;
+
+  // if (fst.Final(start_state) != FST::Weight::Zero()) {
+  //   return start_state;
+  // }
+  // template <class Arc>
+  // class Visitor {
+  //  public:
+  //   using StateId = typename Arc::StateId;
+  //   fst::Fst<Arc>* fst_;
+  //   Visitor(StateId *return_data) {}
+  //   void InitVisit(const fst::Fst<Arc> &fst) : fst_(fst) {}
+  //   bool InitState(StateId s, StateId root) {
+  //     if (fst.Final(s) != FST::Weight::Zero()) {
+  //       *return_data_ = s;
+  //       return false;
+  //     }
+  //     return true;
+  //   }
+  //   bool TreeArc(StateId s, const Arc &arc) { return true; }
+  //   bool BackArc(StateId s, const Arc &arc) { return true; }
+  //   bool ForwardOrCrossArc(StateId s, const Arc &arc) { return true; }
+  //   void FinishState(StateId s, StateId parent, const Arc *arc) {}
+  //   void FinishVisit() {}
+  // };
+  // FST::Arc::StateId final_state = fst::kNoStateId;
+  // Visitor<typename FST::Arc> visitor(&final_state);
+  // fst::DfsVisit(fst, visitor, fst::InputEpsilonArcFilter<FST>(), true);
+  // return final_state;
 }
 
 // Computes the negative log likelihood (-infinity..0) of the given prefix + id in the FST.
@@ -254,6 +319,9 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
       VLOG(3) << "GetFstScore: old: t" << abs_time_step_ << ": " << word;
     }
   }
+  if (all_words == target_string_.substr(0, all_words.size()) && all_words.size() >= 47) {
+    VLOG(2) << "GetFstScore: target: " << all_words;
+  }
 
   // Check whether the completed word fits in the grammar FST, returning the negative log likelihood.
   auto check_complete_word = [&](int word_id) {
@@ -264,8 +332,8 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
     VLOG(2) << "GetFstScore: check_complete_word: " << word_table_->Find(word_id);
 
     CHECK_NE(word_id, fst::kNoLabel);
-    auto fst_state = current_prefix_score.fst_state != fst::kNoStateId ? current_prefix_score.fst_state : grammar_fst_->Start();
-    grammar_matcher_.SetState(fst_state);
+    auto grammar_fst_state = current_prefix_score.grammar_fst_state != fst::kNoStateId ? current_prefix_score.grammar_fst_state : grammar_fst_->Start();
+    grammar_matcher_.SetState(grammar_fst_state);
     if (true && grammar_matcher_.Find(0)) {
       VLOG(0) << "    found epsilon";
     }
@@ -274,7 +342,8 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
       next_prefix_score.is_in_grammar = false;
     }
     else if (!grammar_matcher_.Find(word_id)) {
-      VLOG(3) << "    return: not found at fst_state " << fst_state;
+      VLOG(3) << "    return: not found at grammar_fst_state " << grammar_fst_state;
+      CHECK(!CheckIfEpsilonPathToILabel(grammar_matcher_, grammar_fst_state, word_id));
       return NoLikelihood;
     }
 
@@ -282,7 +351,7 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
     auto nextstate = grammar_matcher_.Value().nextstate;
     CHECK((grammar_matcher_.Next(), grammar_matcher_.Done()));  // Assume deterministic FST.
 
-    VLOG(1) << "    " << IdsToString(current_prefix, id) << " : fst_state " << next_prefix_score.fst_state << " -> " << nextstate;
+    VLOG(1) << "    " << IdsToString(current_prefix, id) << " : grammar_fst_state " << next_prefix_score.grammar_fst_state << " -> " << nextstate;
     next_prefix_score.SetFstState(nextstate);
     return -weight;
   };  // check_complete_word
@@ -297,7 +366,8 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
     if (!current_prefix.empty() && IdIsStartOfWord(id)) {
       // We have now completed the previous prefix word. We must have ended the dictionary in a final state. Then we check the completed word.
       CHECK_NE(dictionary_fst_state, dictionary_trie_fst_->Start());
-      auto state_is_final = (dictionary_trie_fst_->Final(dictionary_fst_state) != fst::StdArc::Weight::Zero());
+      dictionary_fst_state = FindFinalState(*dictionary_trie_matcher_, dictionary_fst_state);
+      auto state_is_final = (dictionary_fst_state != fst::kNoStateId);
       if (!state_is_final) {
         VLOG(3) << "    return: completed word not in dictionary (though it was a valid prefix)";
         return NoLikelihood;
@@ -316,6 +386,7 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
     matcher.SetState(dictionary_fst_state);
     if (!matcher.Find(id)) {
       VLOG(3) << "    return: partial word prefix not in dictionary";
+      CHECK(!CheckIfEpsilonPathToILabel(matcher, dictionary_fst_state, id));
       return final_weight + NoLikelihood;
     }
     auto olabel = matcher.Value().olabel;
@@ -330,7 +401,8 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
       next_prefix_score.prefix_word_id = prefix_word_id;
     }
     next_prefix_score.dictionary_fst_state = nextstate;
-    auto nextstate_is_final = (dictionary_trie_fst_->Final(nextstate) != fst::StdArc::Weight::Zero());
+    nextstate = FindFinalState(*dictionary_trie_matcher_, nextstate);
+    auto nextstate_is_final = (nextstate != fst::kNoStateId);
     if (!nextstate_is_final) {
       VLOG(3) << "    return: partial word prefix okay so far, but not a guaranteed-completed word yet";
       return final_weight + FullLikelihood;
@@ -507,7 +579,7 @@ void CtcPrefixWfstBeamSearch::BuildUnitDictionaryTrie() {
   // final_dictionary->Write("/home/daz/tmp/dictionary_trie.fst");
 
   dictionary_trie_fst_ = std::move(final_dictionary);
-  dictionary_trie_matcher_ = std::make_unique<fst::SortedMatcher<fst::StdFst>>(*dictionary_trie_fst_, fst::MATCH_INPUT);
+  dictionary_trie_matcher_ = std::make_unique<fst::ExplicitMatcher<fst::SortedMatcher<fst::StdFst>>>(*dictionary_trie_fst_, fst::MATCH_INPUT);
 }
 
 // TODO:
