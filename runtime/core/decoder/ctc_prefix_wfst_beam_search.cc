@@ -19,6 +19,9 @@ namespace wenet {
 
 using PrefixScore = CtcPrefixWfstBeamSearch::PrefixScore;
 using PrefixHash = CtcPrefixWfstBeamSearch::PrefixHash;
+using StateId = fst::StdArc::StateId;
+using Label = fst::StdArc::Label;
+using Weight = fst::StdArc::Weight;
 
 static_assert(std::numeric_limits<float>::is_iec559, "IEEE 754 required");
 constexpr float SuperNoLikelihood = -std::numeric_limits<float>::infinity();
@@ -250,48 +253,25 @@ bool CheckIfEpsilonPathToILabel(fst::ExplicitMatcher<fst::SortedMatcher<fst::Fst
 
 // DFS traversal to find a final state, following only epsilon transitions. Should be sufficient since FST should be deterministic, so only one path to follow.
 template <class Arc>
-typename Arc::StateId FindFinalState(fst::ExplicitMatcher<fst::SortedMatcher<fst::Fst<Arc>>>& matcher, typename Arc::StateId start_state) {
+bool FindFinalState(fst::ExplicitMatcher<fst::SortedMatcher<fst::Fst<Arc>>>& matcher, typename Arc::StateId state, typename Arc::StateId* final_state, typename Arc::Label* final_olabel) {
   auto& fst = matcher.GetFst();
-  while (start_state != fst::kNoStateId) {
-    if (fst.Final(start_state) != Arc::Weight::Zero()) {
-      return start_state;
+  typename Arc::Label olabel = (final_olabel) ? *final_olabel : fst::kNoLabel;
+  while (state != fst::kNoStateId) {
+    if (fst.Final(state) != Arc::Weight::Zero()) {
+      if (final_state) *final_state = state;
+      if (final_olabel) *final_olabel = olabel;
+      return true;
     }
-    matcher.SetState(start_state);
+    matcher.SetState(state);
     if (!matcher.Find(0)) {
-      return fst::kNoStateId;
+      return false;
     }
-    start_state = matcher.Value().nextstate;
+    state = matcher.Value().nextstate;
+    // CHECK(matcher.Value().olabel == 0 || olabel == fst::kNoLabel);  // This should only be set if we are guaranteed not to change word predictions.
+    olabel = (matcher.Value().olabel != 0) ? matcher.Value().olabel : olabel;
     CHECK((matcher.Next(), matcher.Done()));  // Should only have at most one epsilon to follow.
   }
-  return fst::kNoStateId;
-
-  // if (fst.Final(start_state) != FST::Weight::Zero()) {
-  //   return start_state;
-  // }
-  // template <class Arc>
-  // class Visitor {
-  //  public:
-  //   using StateId = typename Arc::StateId;
-  //   fst::Fst<Arc>* fst_;
-  //   Visitor(StateId *return_data) {}
-  //   void InitVisit(const fst::Fst<Arc> &fst) : fst_(fst) {}
-  //   bool InitState(StateId s, StateId root) {
-  //     if (fst.Final(s) != FST::Weight::Zero()) {
-  //       *return_data_ = s;
-  //       return false;
-  //     }
-  //     return true;
-  //   }
-  //   bool TreeArc(StateId s, const Arc &arc) { return true; }
-  //   bool BackArc(StateId s, const Arc &arc) { return true; }
-  //   bool ForwardOrCrossArc(StateId s, const Arc &arc) { return true; }
-  //   void FinishState(StateId s, StateId parent, const Arc *arc) {}
-  //   void FinishVisit() {}
-  // };
-  // FST::Arc::StateId final_state = fst::kNoStateId;
-  // Visitor<typename FST::Arc> visitor(&final_state);
-  // fst::DfsVisit(fst, visitor, fst::InputEpsilonArcFilter<FST>(), true);
-  // return final_state;
+  return false;
 }
 
 // Computes the negative log likelihood (-infinity..0) of the given prefix + id in the FST.
@@ -366,14 +346,13 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
     if (!current_prefix.empty() && IdIsStartOfWord(id)) {
       // We have now completed the previous prefix word. We must have ended the dictionary in a final state. Then we check the completed word.
       CHECK_NE(dictionary_fst_state, dictionary_trie_fst_->Start());
-      dictionary_fst_state = FindFinalState(*dictionary_trie_matcher_, dictionary_fst_state);
-      auto state_is_final = (dictionary_fst_state != fst::kNoStateId);
+      auto word_id = current_prefix_score.prefix_word_id;
+      auto state_is_final = FindFinalState(*dictionary_trie_matcher_, dictionary_fst_state, &dictionary_fst_state, &word_id);
       if (!state_is_final) {
         VLOG(3) << "    return: completed word not in dictionary (though it was a valid prefix)";
         return NoLikelihood;
       }
       auto state_final_weight = dictionary_trie_fst_->Final(dictionary_fst_state).Value();
-      auto word_id = current_prefix_score.prefix_word_id;
       final_weight += -state_final_weight + check_complete_word(word_id);
 
       // Start over fresh for a new word.
@@ -401,11 +380,17 @@ float CtcPrefixWfstBeamSearch::GetFstScore(const std::vector<int>& current_prefi
       next_prefix_score.prefix_word_id = prefix_word_id;
     }
     next_prefix_score.dictionary_fst_state = nextstate;
-    nextstate = FindFinalState(*dictionary_trie_matcher_, nextstate);
-    auto nextstate_is_final = (nextstate != fst::kNoStateId);
-    if (!nextstate_is_final) {
-      VLOG(3) << "    return: partial word prefix okay so far, but not a guaranteed-completed word yet";
-      return final_weight + FullLikelihood;
+    if (opts_.prune_directly_impossible_prefixes || opts_.prune_indirectly_impossible_prefixes) {
+      bool nextstate_is_final = false;
+      if (opts_.prune_indirectly_impossible_prefixes) {
+        nextstate_is_final = FindFinalState(*dictionary_trie_matcher_, nextstate, &nextstate, nullptr);
+      } else if (opts_.prune_directly_impossible_prefixes) {
+        nextstate_is_final = (dictionary_trie_fst_->Final(nextstate).Value() != Weight::Zero());
+      }
+      if (!nextstate_is_final) {
+        VLOG(3) << "    return: partial word prefix okay so far, but not a guaranteed-completed word yet";
+        return final_weight + FullLikelihood;
+      }
     }
 
     // Now guaranteed to be a word in the word table.

@@ -20,9 +20,6 @@ namespace wenet {
 
 using TorchModule = torch::jit::script::Module;
 using Tensor = torch::Tensor;
-using StateId = fst::StdFst::StateId;
-using Label = fst::StdArc::Label;
-using Weight = fst::StdArc::Weight::ValueType;
 
 struct CtcPrefixWfstBeamSearchOptions {
   int blank = 0;  // blank id
@@ -30,6 +27,8 @@ struct CtcPrefixWfstBeamSearchOptions {
   int second_beam_size = 10;
   bool strict = true;
   bool process_partial_word_prefixes = true;
+  bool prune_directly_impossible_prefixes = true;
+  bool prune_indirectly_impossible_prefixes = true;
 };
 
 // Represents everything for a single Prefix, which is a sequence of regularized CTC labels, and so can only grow monotonically.
@@ -43,12 +42,12 @@ struct WfstPrefixScore {
   std::vector<int> times_ns;          // times of viterbi none blank path
 
   bool inheriter = false;
-  StateId grammar_fst_state = fst::kNoStateId;
+  fst::StdArc::StateId grammar_fst_state = fst::kNoStateId;
   bool is_in_grammar = true;
-  StateId dictionary_fst_state = fst::kNoStateId;
-  Label prefix_word_id = fst::kNoLabel;
+  fst::StdArc::StateId dictionary_fst_state = fst::kNoStateId;
+  fst::StdArc::Label prefix_word_id = fst::kNoLabel;
 
-  void SetFstState(StateId state) {
+  void SetFstState(fst::StdArc::StateId state) {
     // if (grammar_fst_state != fst::kNoStateId) {
       // LOG(FATAL) << "grammar_fst_state is already set";
       // if (grammar_fst_state != state) {
@@ -143,7 +142,7 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   std::unique_ptr<fst::ExplicitMatcher<fst::SortedMatcher<fst::StdFst>>> dictionary_trie_matcher_;
 
   const std::string space_symbol_ = kSpaceSymbol;
-  const StateId dictation_lexiconfree_state_ = fst::kNoStateId;
+  const fst::StdArc::StateId dictation_lexiconfree_state_ = fst::kNoStateId;
 
   float GetFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score);
   bool WordIsStartOfWord(const std::string& word);
