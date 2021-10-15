@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.14 FATAL_ERROR)
 project(wenet VERSION 0.1)
 
 option(GRPC "whether to build gRPC" OFF)
+option(WENET_WEBSOCKET "whether to build wenet websocket" OFF)
 
 include_directories(
 ${CMAKE_CURRENT_SOURCE_DIR}
@@ -156,20 +157,24 @@ target_link_libraries(ctc_prefix_beam_search_test PUBLIC gtest_main gmock decode
 add_test(CTC_PREFIX_BEAM_SEARCH_TEST ctc_prefix_beam_search_test)
 
 # websocket
-add_library(websocket STATIC
-  websocket/websocket_client.cc
-  websocket/websocket_server.cc
-)
-target_link_libraries(websocket PUBLIC decoder frontend)
+if(WENET_WEBSOCKET)
+  add_library(websocket STATIC
+    websocket/websocket_client.cc
+    websocket/websocket_server.cc
+  )
+  target_link_libraries(websocket PUBLIC decoder frontend)
+endif(WENET_WEBSOCKET)
 
 
 # binary
 add_executable(decoder_main bin/decoder_main.cc)
 target_link_libraries(decoder_main PUBLIC frontend decoder)
-add_executable(websocket_client_main bin/websocket_client_main.cc)
-target_link_libraries(websocket_client_main PUBLIC websocket)
-add_executable(websocket_server_main bin/websocket_server_main.cc)
-target_link_libraries(websocket_server_main PUBLIC websocket)
+if(WENET_WEBSOCKET)
+  add_executable(websocket_client_main bin/websocket_client_main.cc)
+  target_link_libraries(websocket_client_main PUBLIC websocket)
+  add_executable(websocket_server_main bin/websocket_server_main.cc)
+  target_link_libraries(websocket_server_main PUBLIC websocket)
+endif(WENET_WEBSOCKET)
 add_executable(label_checker_main bin/label_checker_main.cc)
 target_link_libraries(label_checker_main PUBLIC frontend decoder)
 
