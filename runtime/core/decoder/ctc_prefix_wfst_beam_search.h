@@ -66,6 +66,10 @@ struct WfstPrefixScore {
       && prefix_word_id == other.prefix_word_id;
   }
 
+  std::string StateString() const {
+    return std::to_string(grammar_fst_state) + " " + std::to_string(is_in_grammar) + " " + std::to_string(dictionary_fst_state) + " " + std::to_string(prefix_word_id);
+  }
+
   std::vector<std::string> updates;
   void UpdateStamp(std::string str, std::vector<int> prefix) {
     updates.push_back(str);
@@ -185,11 +189,12 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
 
   const std::string space_symbol_ = kSpaceSymbol;
   const fst::StdArc::StateId dictation_lexiconfree_state_ = fst::kNoStateId;
+  const fst::StdArc::StateId dictation_end_state_ = fst::kNoStateId;
 
   void ProcessEmitting(HypsMap& next_hyps);
   void ProcessNonemitting(HypsMap& next_hyps);
   float ComputeFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score);
-  void ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score, std::function<void(PrefixScore&, float)> add_new_next_prefix_score);
+  void ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, std::function<void(PrefixScore&, float)> add_new_next_prefix_score);
   bool WordIsStartOfWord(const std::string& word);
   bool IdIsStartOfWord(int id);
   std::string IdsToString(const std::vector<int> ids, int extra_id = -1, int max_len = -1);
