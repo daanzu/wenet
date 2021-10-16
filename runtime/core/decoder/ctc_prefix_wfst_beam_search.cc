@@ -324,9 +324,8 @@ void CtcPrefixWfstBeamSearch::ProcessEmitting(HypsMap& next_hyps) {
           // TODO: Is it more efficient to just take as parameters the new next state, and use a new constructor which takes the new state along with the fst_score to add?
           if (opts_.strict && fst_score <= NoLikelihood) return;  // If in strict mode, drop any scores with no likelihood in the grammar.
           VLOG(2) << "    " << IdsToString(current_prefix, id) << " : grammar_fst_state " << orig_next_score.grammar_fst_state << " -> " << new_next_score.grammar_fst_state;
-          // if (new_next_score.ns != -kFloatMax) {
           if (fst_score < FullLikelihood) {
-            new_next_score.ns = LogAdd(new_next_score.ns, fst_score);  // Both Case 2 & 3 only update .ns, and they are the only ones that add these tokens.
+            new_next_score.ns += fst_score;  // Both Case 2 & 3 only update .ns, and they are the only ones that add these tokens.
             VLOG(2) << "        ns " << orig_next_score.ns << " + " << fst_score << " -> " << new_next_score.ns;
           }
           AddCombineToHypsMap(new_next_hyps, PrefixStateHash::make_prefix_state(new_prefix, new_next_score), new_next_score);
