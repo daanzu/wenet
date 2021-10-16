@@ -29,6 +29,7 @@ struct CtcPrefixWfstBeamSearchOptions {
   bool process_partial_word_prefixes = false;
   bool prune_directly_impossible_prefixes = true;
   bool prune_indirectly_impossible_prefixes = true;
+  float dictation_wordpiece_insertion_penalty = 0.1;
 };
 
 // Represents everything for a single Prefix, which is a sequence of regularized CTC labels, and so can only grow monotonically.

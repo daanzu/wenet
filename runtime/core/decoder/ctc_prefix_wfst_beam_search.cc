@@ -277,6 +277,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
     }
     VLOG(1) << "";
   }
+  // FIXME: When utterance is complete, we should handle checking for FST Final states.
 }
 
 void AddCombineToHypsMap(HypsMap& hyps, const PrefixState& prefix_state, const PrefixScore& prefix_score) {
@@ -441,6 +442,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     return -weight;
   };  // check_complete_word()
 
+  // Handle free dictation, outside the grammar.
   if (!current_prefix_score.is_in_grammar) {
     grammar_matcher_.SetState(next_prefix_score.grammar_fst_state);
     CHECK(grammar_matcher_.Find(dictation_end_state_));  // We must have at least one way to end the dictation, and possibly multiple.
@@ -459,11 +461,11 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     ComputeFstScores(current_prefix, new_current_prefix_score, id, new_next_prefix_score, add_new_next_prefix_score);
 
     // Finally, just absorb the new word, without ending the dictation.
-    add_new_next_prefix_score(next_prefix_score, FullLikelihood);
+    add_new_next_prefix_score(next_prefix_score, -opts_.dictation_wordpiece_insertion_penalty);
     return;
   }
 
-  // Either handle partial word prefixes, or only complete words.
+  // Handle either: partial word prefixes, or only complete words.
   if (opts_.process_partial_word_prefixes) {
     float final_weight = FullLikelihood;
     auto dictionary_fst_state = current_prefix_score.dictionary_fst_state != fst::kNoStateId ? current_prefix_score.dictionary_fst_state : dictionary_trie_fst_->Start();
