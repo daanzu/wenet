@@ -439,17 +439,21 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
   };  // check_complete_word()
 
   if (!current_prefix_score.is_in_grammar) {
-    // First, branch off assuming this is the end of the dictation, after absorbing the new word.
     grammar_matcher_.SetState(next_prefix_score.grammar_fst_state);
     CHECK(grammar_matcher_.Find(dictation_end_state_));  // We must have at least one way to end the dictation, and possibly multiple.
-    for (; !grammar_matcher_.Done(); grammar_matcher_.Next()) {
-      auto weight = grammar_matcher_.Value().weight.Value();
-      auto nextstate = grammar_matcher_.Value().nextstate;
-      auto new_next_prefix_score = next_prefix_score;
-      new_next_prefix_score.grammar_fst_state = nextstate;
-      new_next_prefix_score.is_in_grammar = true;
-      add_new_next_prefix_score(new_next_prefix_score, -weight);
-    }
+    auto weight = grammar_matcher_.Value().weight.Value();
+    auto nextstate = grammar_matcher_.Value().nextstate;
+    CHECK((grammar_matcher_.Next(), grammar_matcher_.Done()));  // Assume deterministic FST.
+    CHECK_EQ(weight, 0);  // We don't support weights on the dictation end arc.
+
+    // Recurse, assuming we ended the dictation immediately before receiving this word.
+    auto new_current_prefix_score = current_prefix_score;
+    new_current_prefix_score.grammar_fst_state = nextstate;
+    new_current_prefix_score.is_in_grammar = true;
+    auto new_next_prefix_score = next_prefix_score;
+    new_next_prefix_score.grammar_fst_state = nextstate;
+    new_next_prefix_score.is_in_grammar = true;
+    ComputeFstScores(current_prefix, new_current_prefix_score, id, new_next_prefix_score, add_new_next_prefix_score);
 
     // Finally, just absorb the new word, without ending the dictation.
     add_new_next_prefix_score(next_prefix_score, FullLikelihood);
@@ -840,7 +844,6 @@ void CtcPrefixWfstBeamSearch::BuildUnitDictionaryTrie() {
 
 // TODO:
 // - lexicon-bonus mode: don't restrict to only the lexicon, but give bonus to lexicon words.
-// - turn on/off free ctc
 // - epsilon transitions
 // - multiple ambiguous arcs
 
