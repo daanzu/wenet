@@ -286,8 +286,12 @@ void AddCombineToHypsMap(HypsMap& hyps, const PrefixState& prefix_state, const P
   if (!inserted) {
     const auto& old_prefix_state = it->first;
     auto& old_prefix_score = it->second;
-    old_prefix_score.s = LogAdd(old_prefix_score.s, prefix_score.s);
-    old_prefix_score.ns = LogAdd(old_prefix_score.ns, prefix_score.ns);
+    VLOG(2) << "    combine:  s = " << old_prefix_score.s << " + " << prefix_score.s << "  ns = " << old_prefix_score.ns << " + " << prefix_score.ns;
+    // old_prefix_score.s = LogAdd(old_prefix_score.s, prefix_score.s);
+    // old_prefix_score.ns = LogAdd(old_prefix_score.ns, prefix_score.ns);
+    old_prefix_score.s = std::max(old_prefix_score.s, prefix_score.s);
+    old_prefix_score.ns = std::max(old_prefix_score.ns, prefix_score.ns);
+    // FIXME: how best to combine/choose?
     // FIXME: other members?
   }
 }
