@@ -149,6 +149,11 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
       for (int i = 0; i < topk_index.size(0); ++i) {
         VLOG(1) << "start t" << abs_time_step_ << ": " << unit_table_->Find(topk_index[i].item<int>()) << " " << topk_index[i].item<int>() << " " << topk_score[i].item<float>();
       }
+      for (const auto& it : cur_hyps_) {
+        const auto& prefix_score = it.second;
+        // CHECK(prefix_score.delayed_fst_update_tokens.empty());
+        CHECK(!prefix_score.delayed_fst_update);
+      }
     }
 
     // 2. Token passing
@@ -214,7 +219,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
           new_prefix.emplace_back(id);
           PrefixScore& next_score2 = GetNextHyp(next_hyps, new_prefix, prefix_score);
           next_score2.UpdateStamp("case2(" + IdsToString(prefix) + "|" + unit_table_->Find(id) + ")@" + std::to_string(abs_time_step_), new_prefix);
-          next_score2.delayed_fst_update_tokens.emplace_back(prefix, prefix_score, id);
+          next_score2.SetDelayedFstUpdate(prefix, prefix_score, id);
           next_score2.ns = LogAdd(next_score2.ns, prefix_score.s + prob);
           if (next_score2.v_ns < prefix_score.v_s + prob) {
             next_score2.v_ns = prefix_score.v_s + prob;
@@ -230,7 +235,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
           new_prefix.emplace_back(id);
           PrefixScore& next_score = GetNextHyp(next_hyps, new_prefix, prefix_score);
           next_score.UpdateStamp("case3(" + IdsToString(prefix) + "|" + unit_table_->Find(id) + ")@" + std::to_string(abs_time_step_), new_prefix);
-          next_score.delayed_fst_update_tokens.emplace_back(prefix, prefix_score, id);
+          next_score.SetDelayedFstUpdate(prefix, prefix_score, id);
           next_score.ns = LogAdd(next_score.ns, prefix_score.score() + prob);
           if (next_score.v_ns < prefix_score.viterbi_score() + prob) {
             next_score.v_ns = prefix_score.viterbi_score() + prob;
@@ -309,33 +314,34 @@ void CtcPrefixWfstBeamSearch::ProcessEmitting(HypsMap& next_hyps) {
     // Verify that the FST state has not been modified yet, and is still equal to what it was originally copied from.
     CHECK(next_score.grammar_fst_state == std::get<1>(prefix_state) && next_score.dictionary_fst_state == std::get<2>(prefix_state) && next_score.prefix_word_id == std::get<3>(prefix_state));
     // If this hypothesis has no delayed update, we just copy it over to new_next_hyps unmodified.
-    if (next_score.delayed_fst_update_tokens.empty()) {
+    if (!next_score.delayed_fst_update) {
       VLOG(2) << "ProcessEmitting(0): " << IdsToString(new_prefix, -1, 50) << " " << next_score.grammar_fst_state << " " << next_score.dictionary_fst_state << " " << next_score.prefix_word_id << " = " << next_score.score();
       AddCombineToHypsMap(new_next_hyps, prefix_state, next_score);
       continue;
     }
     VLOG(2) << "ProcessEmitting(1): " << IdsToString(new_prefix, -1, 50) << " " << next_score.grammar_fst_state << " " << next_score.dictionary_fst_state << " " << next_score.prefix_word_id << " = " << next_score.score();
-    CHECK_EQ(next_score.delayed_fst_update_tokens.size(), 1);
 
-    for (const auto& token : next_score.delayed_fst_update_tokens) {
-      auto& current_prefix = std::get<0>(token);
-      auto& current_prefix_score = std::get<1>(token);
-      auto id = std::get<2>(token);
-      CHECK(new_prefix.back() == id && std::equal(current_prefix.begin(), current_prefix.end(), new_prefix.begin()));
+    const auto& token = next_score.delayed_fst_update_token;
+    const auto& current_prefix = *std::get<0>(token);
+    const auto& current_prefix_score = *std::get<1>(token);
+    auto id = std::get<2>(token);
+    CHECK(new_prefix.back() == id && std::equal(current_prefix.begin(), current_prefix.end(), new_prefix.begin()));
+    next_score.delayed_fst_update = false;
 
-      auto orig_next_score = next_score;
-      ComputeFstScores(current_prefix, current_prefix_score, id, next_score,
-        [this, &new_next_hyps, &new_prefix, &current_prefix, &orig_next_score, id](PrefixScore& new_next_score, float fst_score) {
-          // TODO: Is it more efficient to just take as parameters the new next state, and use a new constructor which takes the new state along with the fst_score to add?
-          if (opts_.strict && fst_score <= NoLikelihood) return;  // If in strict mode, drop any scores with no likelihood in the grammar.
-          VLOG(2) << "    " << IdsToString(current_prefix, id) << " : grammar_fst_state " << orig_next_score.grammar_fst_state << " -> " << new_next_score.grammar_fst_state;
-          if (fst_score < FullLikelihood) {
-            new_next_score.ns += fst_score;  // Both Case 2 & 3 only update .ns, and they are the only ones that add these tokens.
-            VLOG(2) << "        ns " << orig_next_score.ns << " + " << fst_score << " -> " << new_next_score.ns;
-          }
-          AddCombineToHypsMap(new_next_hyps, PrefixStateHash::make_prefix_state(new_prefix, new_next_score), new_next_score);
-        });
-    }
+    auto orig_next_score = next_score;
+    ComputeFstScores(current_prefix, current_prefix_score, id, next_score,
+      [this, &new_next_hyps, &new_prefix, &current_prefix, &orig_next_score, id](PrefixScore& new_next_score, float fst_score) {
+        // Note: this takes new_next_score by reference for efficiency, and its modifications are not intended to be used outside of this function.
+        // TODO: Is it more efficient to just take as parameters the new next state, and use a new constructor which takes the new state along with the fst_score to add?
+        if (opts_.strict && fst_score <= NoLikelihood) return;  // If in strict mode, drop any scores with no likelihood in the grammar.
+        VLOG(2) << "    " << IdsToString(current_prefix, id) << " : grammar_fst_state " << orig_next_score.grammar_fst_state << " -> " << new_next_score.grammar_fst_state;
+        if (fst_score < FullLikelihood) {
+          new_next_score.ns += fst_score;  // Both Case 2 & 3 only update .ns, and they are the only ones that add these tokens.
+          VLOG(2) << "        ns " << orig_next_score.ns << " + " << fst_score << " -> " << new_next_score.ns;
+        }
+        AddCombineToHypsMap(new_next_hyps, PrefixStateHash::make_prefix_state(new_prefix, new_next_score), new_next_score);
+      }
+    );
   }
   next_hyps.swap(new_next_hyps);
 }

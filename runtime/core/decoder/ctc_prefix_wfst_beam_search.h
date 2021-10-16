@@ -42,7 +42,13 @@ struct WfstPrefixScore {
   std::vector<int> times_s;           // times of viterbi blank path
   std::vector<int> times_ns;          // times of viterbi none blank path
 
-  std::vector<std::tuple<const std::vector<int>, const WfstPrefixScore&, int>> delayed_fst_update_tokens;  // Delayed updates to FST state, each for given current_prefix, current_prefix_score, and word_piece id.
+  bool delayed_fst_update = false;
+  std::tuple<const std::vector<int>*, const WfstPrefixScore*, int> delayed_fst_update_token;  // Delayed updates to FST state, each for given current_prefix, current_prefix_score, and word_piece id.
+
+  void SetDelayedFstUpdate(const std::vector<int>& prefix, const WfstPrefixScore& prefix_score, int word_piece_id) {
+    delayed_fst_update = true;
+    delayed_fst_update_token = std::make_tuple(&prefix, &prefix_score, word_piece_id);
+  }
 
   fst::StdArc::StateId grammar_fst_state = fst::kNoStateId;
   bool is_in_grammar = true;  // This should be entirely dependent on grammar_fst_state, and not path-dependent.
