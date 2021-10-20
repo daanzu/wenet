@@ -266,7 +266,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
     times_.clear();
     for (auto& item : arr) {
       const auto& prefix = std::get<0>(item.first);
-      VLOG(1) << "end t" << abs_time_step_ << ": " << IdsToString(prefix, -1, 50) << " = " << item.second.score()
+      VLOG(1) << "end t" << abs_time_step_ << ": " << IdsToString(prefix, -1, 60) << " = " << item.second.score()
               << "    state=(" << item.second.StateString() << ")"
               // << "    grammar_fst_state=" << item.second.grammar_fst_state
               // << "    dict_fst_state=" << item.second.dictionary_fst_state
@@ -411,7 +411,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
   // Note: We are never called with the blank unit id.
 
   // Check whether the completed word fits in the grammar FST, returning the negative log likelihood. Only needs to handle grammar_fst, because only considers complete words.
-  auto check_complete_word = [this, &current_prefix_score](PrefixScore& next_prefix_score, int word_id) {
+  auto check_complete_word = [this, &current_prefix_score](const PrefixScore& next_prefix_score, int word_id, std::function<void(PrefixScore&, float)> add_new_next_prefix_score) {
     // static std::set<int> seen_word_ids;
     // if (seen_word_ids.find(word_id) == seen_word_ids.end()) {
     //   seen_word_ids.insert(word_id);
@@ -422,44 +422,27 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     auto grammar_fst_state = current_prefix_score.grammar_fst_state != fst::kNoStateId ? current_prefix_score.grammar_fst_state : grammar_fst_->Start();
     grammar_matcher_.SetState(grammar_fst_state);
 
-    if (true && grammar_matcher_.Find(dictation_lexiconfree_state_)) {
-      // FIXME: handle non-determinism starting dictation.
+    auto follow_arc = [&add_new_next_prefix_score](PrefixScore& new_next_prefix_score, const fst::StdArc& arc) {
+      auto weight = arc.weight.Value();
+      auto nextstate = arc.nextstate;
+      new_next_prefix_score.grammar_fst_state = nextstate;
+      add_new_next_prefix_score(new_next_prefix_score, -weight);
+    };
+
+    if (grammar_matcher_.Find(dictation_lexiconfree_state_)) {
       VLOG(1) << "    found dictation_lexiconfree_state_";
-      next_prefix_score.is_in_grammar = false;
-    } else if (!grammar_matcher_.Find(word_id)) {
-      VLOG(3) << "    return: not found at grammar_fst_state " << grammar_fst_state;
-      CHECK(!CheckIfEpsilonPathToILabel<fst::StdArc>(grammar_matcher_, grammar_fst_state, word_id));
-      return NoLikelihood;
+      PrefixScore new_next_prefix_score = next_prefix_score;
+      new_next_prefix_score.is_in_grammar = false;
+      follow_arc(new_next_prefix_score, grammar_matcher_.Value());
+      CHECK((grammar_matcher_.Next(), grammar_matcher_.Done()));  // Assume deterministic FST.
     }
 
-    auto weight = grammar_matcher_.Value().weight.Value();
-    auto nextstate = grammar_matcher_.Value().nextstate;
-    CHECK((grammar_matcher_.Next(), grammar_matcher_.Done()));  // Assume deterministic FST.
-
-    next_prefix_score.grammar_fst_state = nextstate;
-    return -weight;
+    grammar_matcher_.Find(word_id);
+    for (; !grammar_matcher_.Done(); grammar_matcher_.Next()) {
+      PrefixScore new_next_prefix_score = next_prefix_score;
+      follow_arc(new_next_prefix_score, grammar_matcher_.Value());
+    }
   };  // check_complete_word()
-
-  auto add_following_nonemitting = [this, &add_new_next_prefix_score](const PrefixScore& initial_prefix_score, float initial_weight) {
-    auto grammar_fst_state = initial_prefix_score.grammar_fst_state != fst::kNoStateId ? initial_prefix_score.grammar_fst_state : grammar_fst_->Start();
-    std::list<std::pair<int, float>> queue({{grammar_fst_state, initial_weight}});
-
-    while (!queue.empty()) {
-      int fst_state = queue.front().first;
-      float weight = queue.front().second;
-      queue.pop_front();
-
-      PrefixScore new_prefix_score = initial_prefix_score;
-      new_prefix_score.grammar_fst_state = fst_state;
-      add_new_next_prefix_score(new_prefix_score, weight);
-
-      grammar_matcher_.SetState(fst_state);
-      for (grammar_matcher_.Find(0); !grammar_matcher_.Done(); grammar_matcher_.Next()) {
-        const auto& arc = grammar_matcher_.Value();
-        queue.emplace_back(arc.nextstate, weight + arc.weight.Value());
-      }
-    }
-  };  // add_following_nonemitting()
 
   // Generate debugging info.
   auto current_prefix_words = IdsToString(current_prefix);
@@ -542,7 +525,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
         return add_new_next_prefix_score(next_prefix_score, NoLikelihood);
       }
       auto state_final_weight = dictionary_trie_fst_->Final(dictionary_fst_state).Value();
-      final_weight += -state_final_weight + check_complete_word(next_prefix_score, word_id);  // FIXME!!!!!
+      // final_weight += -state_final_weight + check_complete_word(next_prefix_score, word_id);  // FIXME!!!!!
 
       // Start over fresh for a new word.
       dictionary_fst_state = dictionary_trie_fst_->Start();
@@ -608,8 +591,8 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
       return add_new_next_prefix_score(next_prefix_score, NoLikelihood);
     }
 
-    auto score = check_complete_word(next_prefix_score, word_id);
-    return add_new_next_prefix_score(next_prefix_score, score);
+    check_complete_word(next_prefix_score, word_id, add_new_next_prefix_score);
+    return;
   }
 
   LOG(FATAL) << "We should never reach here.";
@@ -911,6 +894,5 @@ void CtcPrefixWfstBeamSearch::BuildUnitDictionaryTrie() {
 // - lexicon-bonus mode: don't restrict to only the lexicon, but give bonus to lexicon words.
 // - final states: upon end of utterance
 //   - epsilon transitions
-// - multiple ambiguous arcs
 
 }  // namespace wenet
