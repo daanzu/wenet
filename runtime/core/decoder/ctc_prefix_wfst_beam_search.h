@@ -198,8 +198,7 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   const fst::StdArc::StateId dictation_lexiconfree_state_ = fst::kNoStateId;
   const fst::StdArc::StateId dictation_end_state_ = fst::kNoStateId;
 
-  void ProcessEmitting(HypsMap& next_hyps);
-  void ProcessNonemitting(HypsMap& next_hyps);
+  void ProcessFstUpdates(HypsMap& next_hyps);
   float ComputeFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score);
   void ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, std::function<void(PrefixScore&, float)> add_new_next_prefix_score);
   bool WordIsStartOfWord(const std::string& word);

@@ -247,8 +247,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
       }
     }
 
-    ProcessEmitting(next_hyps);
-    // ProcessNonemitting(next_hyps);
+    ProcessFstUpdates(next_hyps);
 
     // 3. Second beam prune, only keep top n best paths
     std::vector<std::pair<PrefixState, PrefixScore>> arr(next_hyps.begin(), next_hyps.end());
@@ -302,7 +301,7 @@ void AddCombineToHypsMap(HypsMap& hyps, const PrefixState& prefix_state, const P
   }
 }
 
-void CtcPrefixWfstBeamSearch::ProcessEmitting(HypsMap& next_hyps) {
+void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps) {
   // Now that we have completed all of the standard CTC processing to compute scores, we can do FST processing, which may modify the FST states and possibly even split a single prefix_score into multiple prefix_scores (due to nondeterministic/epsilon FST transitions).
   // TODO: Is it more efficient to make a new map and copy over, or to modify the existing map (considering no rehashes when erasing but rehashes when inserting)?
   HypsMap new_next_hyps;
@@ -331,8 +330,9 @@ void CtcPrefixWfstBeamSearch::ProcessEmitting(HypsMap& next_hyps) {
     auto orig_next_score = next_score;
     ComputeFstScores(current_prefix, current_prefix_score, id, next_score,
       [this, &new_next_hyps, &new_prefix, &current_prefix, &orig_next_score, id](PrefixScore& new_next_score, float fst_score) {
-        // Note: this takes new_next_score by reference for efficiency, and its modifications are not intended to be used outside of this function.
+        // Warning: this takes new_next_score by reference for efficiency, and its modifications are not intended to be used outside of this function.
         // TODO: Is it more efficient to just take as parameters the new next state, and use a new constructor which takes the new state along with the fst_score to add?
+        CHECK_LE(fst_score, 0);
         if (opts_.strict && fst_score <= NoLikelihood) return;  // If in strict mode, drop any scores with no likelihood in the grammar.
         VLOG(2) << "    " << IdsToString(current_prefix, id) << " : grammar_fst_state " << orig_next_score.grammar_fst_state << " -> " << new_next_score.grammar_fst_state;
         if (fst_score < FullLikelihood) {
@@ -346,7 +346,23 @@ void CtcPrefixWfstBeamSearch::ProcessEmitting(HypsMap& next_hyps) {
   next_hyps.swap(new_next_hyps);
 }
 
-void CtcPrefixWfstBeamSearch::ProcessNonemitting(HypsMap& next_hyps) {
+// Follow epsilon transitions on grammar, accumulating weights, calling handler function with each grammar state reached.
+void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore& initial_prefix_score, float initial_weight, std::function<void(PrefixScore&, float)> handle_prefix_score) {
+  auto initial_fst_state = initial_prefix_score.grammar_fst_state != fst::kNoStateId ? initial_prefix_score.grammar_fst_state : matcher.GetFst().Start();
+  std::list<std::pair<int, float>> queue({std::make_pair(initial_fst_state, initial_weight)});
+  while (!queue.empty()) {
+    int fst_state = queue.front().first;
+    float weight = queue.front().second;
+    queue.pop_front();
+    PrefixScore new_prefix_score = initial_prefix_score;
+    new_prefix_score.grammar_fst_state = fst_state;
+    handle_prefix_score(new_prefix_score, weight);
+    matcher.SetState(fst_state);
+    for (matcher.Find(0); !matcher.Done(); matcher.Next()) {
+      const auto& arc = matcher.Value();
+      queue.emplace_back(arc.nextstate, weight + arc.weight.Value());
+    }
+  }
 }
 
 // Check whether there is an epsilon-path from start_state to a state with an arc with the given ilabel.
@@ -394,10 +410,61 @@ bool FindFinalState(CtcPrefixWfstBeamSearch::Matcher& matcher, typename Arc::Sta
 void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, std::function<void(PrefixScore&, float)> add_new_next_prefix_score) {
   // Note: We are never called with the blank unit id.
 
+  // Check whether the completed word fits in the grammar FST, returning the negative log likelihood. Only needs to handle grammar_fst, because only considers complete words.
+  auto check_complete_word = [this, &current_prefix_score](PrefixScore& next_prefix_score, int word_id) {
+    // static std::set<int> seen_word_ids;
+    // if (seen_word_ids.find(word_id) == seen_word_ids.end()) {
+    //   seen_word_ids.insert(word_id);
+    // }
+    VLOG(2) << "ComputeFstScores: check_complete_word: " << word_table_->Find(word_id);
+
+    CHECK_NE(word_id, fst::kNoLabel);
+    auto grammar_fst_state = current_prefix_score.grammar_fst_state != fst::kNoStateId ? current_prefix_score.grammar_fst_state : grammar_fst_->Start();
+    grammar_matcher_.SetState(grammar_fst_state);
+
+    if (true && grammar_matcher_.Find(dictation_lexiconfree_state_)) {
+      // FIXME: handle non-determinism starting dictation.
+      VLOG(1) << "    found dictation_lexiconfree_state_";
+      next_prefix_score.is_in_grammar = false;
+    } else if (!grammar_matcher_.Find(word_id)) {
+      VLOG(3) << "    return: not found at grammar_fst_state " << grammar_fst_state;
+      CHECK(!CheckIfEpsilonPathToILabel<fst::StdArc>(grammar_matcher_, grammar_fst_state, word_id));
+      return NoLikelihood;
+    }
+
+    auto weight = grammar_matcher_.Value().weight.Value();
+    auto nextstate = grammar_matcher_.Value().nextstate;
+    CHECK((grammar_matcher_.Next(), grammar_matcher_.Done()));  // Assume deterministic FST.
+
+    next_prefix_score.grammar_fst_state = nextstate;
+    return -weight;
+  };  // check_complete_word()
+
+  auto add_following_nonemitting = [this, &add_new_next_prefix_score](const PrefixScore& initial_prefix_score, float initial_weight) {
+    auto grammar_fst_state = initial_prefix_score.grammar_fst_state != fst::kNoStateId ? initial_prefix_score.grammar_fst_state : grammar_fst_->Start();
+    std::list<std::pair<int, float>> queue({{grammar_fst_state, initial_weight}});
+
+    while (!queue.empty()) {
+      int fst_state = queue.front().first;
+      float weight = queue.front().second;
+      queue.pop_front();
+
+      PrefixScore new_prefix_score = initial_prefix_score;
+      new_prefix_score.grammar_fst_state = fst_state;
+      add_new_next_prefix_score(new_prefix_score, weight);
+
+      grammar_matcher_.SetState(fst_state);
+      for (grammar_matcher_.Find(0); !grammar_matcher_.Done(); grammar_matcher_.Next()) {
+        const auto& arc = grammar_matcher_.Value();
+        queue.emplace_back(arc.nextstate, weight + arc.weight.Value());
+      }
+    }
+  };  // add_following_nonemitting()
+
   // Generate debugging info.
   auto current_prefix_words = IdsToString(current_prefix);
   auto all_words = IdsToString(current_prefix, id);
-  if (true) {
+  if (false) {
     std::vector<std::string> word_pieces;
     std::transform(current_prefix.begin(), current_prefix.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
     word_pieces.emplace_back(unit_table_->Find(id));
@@ -414,39 +481,26 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     VLOG(2) << "ComputeFstScores: target: " << all_words;
   }
 
-  // Check whether the completed word fits in the grammar FST, returning the negative log likelihood. Only needs to handle grammar_fst, because only considers complete words.
-  auto check_complete_word = [this, &current_prefix_score](PrefixScore& next_prefix_score, int word_id) {
-    // static std::set<int> seen_word_ids;
-    // if (seen_word_ids.find(word_id) == seen_word_ids.end()) {
-    //   seen_word_ids.insert(word_id);
-    // }
-    VLOG(2) << "ComputeFstScores: check_complete_word: " << word_table_->Find(word_id);
+  // Handle initialization.
+  // if (current_prefix.empty()) {
+  // }
 
-    CHECK_NE(word_id, fst::kNoLabel);
+  // Handle epsilon transitions at beginning of this-time-step processing, rather than at the end of the previous time step.
+  if (true) {
     auto grammar_fst_state = current_prefix_score.grammar_fst_state != fst::kNoStateId ? current_prefix_score.grammar_fst_state : grammar_fst_->Start();
     grammar_matcher_.SetState(grammar_fst_state);
-
-    // FIXME
-    if (true && grammar_matcher_.Find(0)) {
-      VLOG(0) << "    found epsilon";
-      CHECK(false);  // FIXME: We don't support this yet.
+    // Check if we have any epsilon transitions.
+    if (grammar_matcher_.Find(0)) {
+      // Recurse, following epsilon transitions.
+      FollowEpsilons(grammar_matcher_, current_prefix_score, 0, 
+        [&](PrefixScore& new_current_prefix_score, float weight) {
+          ComputeFstScores(current_prefix, new_current_prefix_score, id, next_prefix_score, add_new_next_prefix_score);
+        }
+      );
+      return;
     }
-    if (true && grammar_matcher_.Find(dictation_lexiconfree_state_)) {
-      VLOG(1) << "    found dictation_lexiconfree_state_";
-      next_prefix_score.is_in_grammar = false;
-    } else if (!grammar_matcher_.Find(word_id)) {
-      VLOG(3) << "    return: not found at grammar_fst_state " << grammar_fst_state;
-      CHECK(!CheckIfEpsilonPathToILabel<fst::StdArc>(grammar_matcher_, grammar_fst_state, word_id));
-      return NoLikelihood;
-    }
-
-    auto weight = grammar_matcher_.Value().weight.Value();
-    auto nextstate = grammar_matcher_.Value().nextstate;
-    CHECK((grammar_matcher_.Next(), grammar_matcher_.Done()));  // Assume deterministic FST.
-
-    next_prefix_score.grammar_fst_state = nextstate;
-    return -weight;
-  };  // check_complete_word()
+    // Fall through and continue.
+  }
 
   // Handle free dictation, outside the grammar.
   if (!current_prefix_score.is_in_grammar) {
@@ -855,7 +909,8 @@ void CtcPrefixWfstBeamSearch::BuildUnitDictionaryTrie() {
 
 // TODO:
 // - lexicon-bonus mode: don't restrict to only the lexicon, but give bonus to lexicon words.
-// - epsilon transitions
+// - final states: upon end of utterance
+//   - epsilon transitions
 // - multiple ambiguous arcs
 
 }  // namespace wenet
