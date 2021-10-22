@@ -349,18 +349,20 @@ void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps) {
 // Follow epsilon transitions on grammar, accumulating weights, calling handler function with each grammar state reached.
 void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore& initial_prefix_score, float initial_weight, std::function<void(PrefixScore&, float)> handle_prefix_score) {
   auto initial_fst_state = initial_prefix_score.grammar_fst_state != fst::kNoStateId ? initial_prefix_score.grammar_fst_state : matcher.GetFst().Start();
-  std::list<std::pair<int, float>> queue({std::make_pair(initial_fst_state, initial_weight)});
-  while (!queue.empty()) {
-    int fst_state = queue.front().first;
-    float weight = queue.front().second;
-    queue.pop_front();
+  std::list<std::pair<int, float>> state_queue({std::make_pair(initial_fst_state, initial_weight)});
+  std::unordered_set<int> queued_states(initial_fst_state);
+  while (!state_queue.empty()) {
+    int fst_state = state_queue.front().first;
+    float weight = state_queue.front().second;
+    state_queue.pop_front();
     PrefixScore new_prefix_score = initial_prefix_score;
     new_prefix_score.grammar_fst_state = fst_state;
     handle_prefix_score(new_prefix_score, weight);
     matcher.SetState(fst_state);
     for (matcher.Find(0); !matcher.Done(); matcher.Next()) {
       const auto& arc = matcher.Value();
-      queue.emplace_back(arc.nextstate, weight + arc.weight.Value());
+      if (queued_states.count(arc.nextstate)) continue;
+      state_queue.emplace_back(arc.nextstate, weight + arc.weight.Value());
     }
   }
 }
