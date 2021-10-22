@@ -31,11 +31,21 @@ constexpr float SuperNoLikelihood = -std::numeric_limits<float>::infinity();
 constexpr float NoLikelihood = -std::numeric_limits<float>::max();
 constexpr float FullLikelihood = 0.0f;
 
-std::string target_string_ = "▁I'D▁LIKE▁TO▁SHARE▁WITH▁YOU▁A▁DISCOVERY▁THAT▁I▁MADE▁A▁FEW▁MONTHS▁AGO▁WHILE▁WRITING▁AN▁ARTICLE▁FOR▁ITALIAN▁WIRED▁I▁ALWAYS▁KEEP▁MY▁THESAURUS▁HANDY▁WHENEVER▁I'M▁WRITING▁ANYTHING▁BUT";
+std::string target_string_ = "";
 
-CtcPrefixWfstBeamSearch::CtcPrefixWfstBeamSearch(std::shared_ptr<fst::StdFst> fst, std::shared_ptr<fst::SymbolTable> word_table, std::shared_ptr<fst::SymbolTable> unit_table, const CtcPrefixWfstBeamSearchOptions& opts)
-    : opts_(opts), grammar_fst_(fst), grammar_matcher_(*grammar_fst_, fst::MATCH_INPUT), word_table_(word_table), unit_table_(unit_table),
-      dictation_lexiconfree_state_(word_table->Find("#NONTERM:DICTATION_LEXICONFREE")), dictation_end_state_(word_table->Find("#NONTERM:END")) {
+CtcPrefixWfstBeamSearch::CtcPrefixWfstBeamSearch(
+    std::shared_ptr<fst::StdFst> fst,
+    std::shared_ptr<fst::SymbolTable> word_table,
+    std::shared_ptr<fst::SymbolTable> unit_table,
+    const CtcPrefixWfstBeamSearchOptions& opts)
+    : opts_(opts),
+      grammar_fst_(fst),
+      grammar_matcher_(*grammar_fst_, fst::MATCH_INPUT),
+      word_table_(word_table),
+      unit_table_(unit_table),
+      dictation_lexiconfree_label_(
+          word_table->Find("#NONTERM:DICTATION_LEXICONFREE")),
+      dictation_end_label_(word_table->Find("#NONTERM:END")) {
   BuildUnitDictionaryTrie();
   Reset();
 }
@@ -61,62 +71,6 @@ static bool PrefixScoreCompare(
     const std::pair<PrefixState, PrefixScore>& b) {
   return a.second.score() > b.second.score();
 }
-
-// PrefixScore& GetNextHyp(std::unordered_map<std::vector<int>, PrefixScore, PrefixHash>& next_hyps, const std::vector<int>& prefix, const PrefixScore& current_score) {
-//   // next_hyps is initialized empty at the beginning of each time stamp, so each of its prefix_scores are only generated for/in the current time stamp.
-//   // The prefix_scores inherit their scores (and other state data) exclusively from prefix_scores from the previous time stamp (no data from others in the current time stamp).
-//   // Obviously all prefix_scores for a given prefix represent that same prefix, but they may have taken different paths to get there.
-//   // Inheritance (backward-looking) of prefix_score???
-//   PrefixScore& next_score = next_hyps[prefix];
-
-//   // If the prefix_score for the prefix was just created above (and thus has not inherited yet), then inherit States from the current prefix_score.
-//   if (!next_score.inheriter) {
-//     next_score.inheriter = true;
-//     next_score.SetFstState(current_score.grammar_fst_state);
-//     next_score.dictionary_fst_state = current_score.dictionary_fst_state;
-//     next_score.prefix_word_id = current_score.prefix_word_id;
-//     next_score.is_in_grammar = current_score.is_in_grammar;
-//   }
-
-//   return next_score;
-// }
-
-// PrefixScore& GetNextHyp(std::unordered_multimap<std::vector<int>, PrefixScore, PrefixHash>& next_hyps, const std::vector<int>& prefix, const PrefixScore& current_score) {
-//   // next_hyps is initialized empty at the beginning of each time stamp, so each of its prefix_scores are only generated for/in the current time stamp.
-//   // The prefix_scores inherit their scores (and other state data) exclusively from prefix_scores from the previous time stamp (no data from others in the current time stamp).
-//   // Obviously all prefix_scores for a given prefix represent that same prefix, but they may have taken different paths to get there.
-//   // Inheritance (backward-looking) of prefix_score???
-
-//   auto range = next_hyps.equal_range(prefix);
-//   if (range.first == next_hyps.end()) {
-//     // No existing prefix_score for the prefix, so create one.
-//     PrefixScore& next_score = next_hyps.emplace(prefix, current_score)->second;
-//     CHECK(!next_score.inheriter);
-//     next_score.inheriter = true;
-//     next_score.SetFstState(current_score.grammar_fst_state);
-//     next_score.dictionary_fst_state = current_score.dictionary_fst_state;
-//     next_score.prefix_word_id = current_score.prefix_word_id;
-//     next_score.is_in_grammar = current_score.is_in_grammar;
-//   } else {
-//     for (auto it = range.first; it != range.second; ++it) {
-//     }
-//   }
-
-//   return next_score;
-// }
-
-// PrefixScore GetNextHyp(HypsMap& next_hyps, const std::vector<int>& prefix, const PrefixScore& current_score) {
-//   // next_hyps is initialized empty at the beginning of each time stamp, so each of its prefix_scores are only generated for/in the current time stamp.
-//   // The prefix_scores inherit their scores (and other state data) exclusively from prefix_scores from the previous time stamp (no data from others in the current time stamp).
-//   // Obviously all prefix_scores for a given prefix represent that same prefix, but they may have taken different paths to get there.
-//   // Inheritance (backward-looking) of prefix_score???
-//   const auto& key = PrefixStateHash::make_prefix_state(prefix, current_score);
-//   auto& it = next_hyps.find(key);
-//   if (it != next_hyps.end()) {
-//     return it->second;
-//   }
-//   return PrefixScore(current_score);
-// }
 
 PrefixScore& GetNextHyp(HypsMap& next_hyps, const std::vector<int>& prefix, const PrefixScore& current_score) {
   // next_hyps is initialized empty at the beginning of each time stamp, so each of its prefix_scores are only generated for/in the current time stamp.
@@ -314,11 +268,11 @@ void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps) {
     CHECK(next_score.grammar_fst_state == std::get<1>(prefix_state) && next_score.dictionary_fst_state == std::get<2>(prefix_state) && next_score.prefix_word_id == std::get<3>(prefix_state));
     // If this hypothesis has no delayed update, we just copy it over to new_next_hyps unmodified.
     if (!next_score.delayed_fst_update) {
-      VLOG(2) << "ProcessEmitting(0): " << IdsToString(new_prefix, -1, 50) << " " << next_score.grammar_fst_state << " " << next_score.dictionary_fst_state << " " << next_score.prefix_word_id << " = " << next_score.score();
+      VLOG(2) << "ProcessFstUpdates(0): " << IdsToString(new_prefix, -1, 50) << " " << next_score.grammar_fst_state << " " << next_score.dictionary_fst_state << " " << next_score.prefix_word_id << " = " << next_score.score();
       AddCombineToHypsMap(new_next_hyps, prefix_state, next_score);
       continue;
     }
-    VLOG(2) << "ProcessEmitting(1): " << IdsToString(new_prefix, -1, 50) << " " << next_score.grammar_fst_state << " " << next_score.dictionary_fst_state << " " << next_score.prefix_word_id << " = " << next_score.score();
+    VLOG(2) << "ProcessFstUpdates(1): " << IdsToString(new_prefix, -1, 50) << " " << next_score.grammar_fst_state << " " << next_score.dictionary_fst_state << " " << next_score.prefix_word_id << " = " << next_score.score();
 
     const auto& token = next_score.delayed_fst_update_token;
     const auto& current_prefix = *std::get<0>(token);
@@ -346,7 +300,7 @@ void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps) {
   next_hyps.swap(new_next_hyps);
 }
 
-// Follow epsilon transitions on grammar, accumulating weights, calling handler function with each grammar state reached.
+// Follow epsilon transitions on grammar, accumulating weights, calling handler function with each grammar state reached (including the initial state).
 void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore& initial_prefix_score, float initial_weight, std::function<void(PrefixScore&, float)> handle_prefix_score) {
   auto initial_fst_state = initial_prefix_score.grammar_fst_state != fst::kNoStateId ? initial_prefix_score.grammar_fst_state : matcher.GetFst().Start();
   std::list<std::pair<int, float>> state_queue({std::make_pair(initial_fst_state, initial_weight)});
@@ -412,7 +366,7 @@ bool FindFinalState(CtcPrefixWfstBeamSearch::Matcher& matcher, typename Arc::Sta
 void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, std::function<void(PrefixScore&, float)> add_new_next_prefix_score) {
   // Note: We are never called with the blank unit id.
 
-  // Check whether the completed word fits in the grammar FST, returning the negative log likelihood. Only needs to handle grammar_fst, because only considers complete words.
+  // Check whether the completed word fits in the grammar FST, and if so, passes updated prefix_score (following the matching single arc or multiple arcs) (along with the negative log likelihood) to given handler. Only needs to handle grammar_fst, because it only considers complete words. Also handles transitioning to dictation.
   auto check_complete_word = [this, &current_prefix_score](const PrefixScore& next_prefix_score, int word_id, std::function<void(PrefixScore&, float)> add_new_next_prefix_score) {
     // static std::set<int> seen_word_ids;
     // if (seen_word_ids.find(word_id) == seen_word_ids.end()) {
@@ -431,8 +385,8 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
       add_new_next_prefix_score(new_next_prefix_score, -weight);
     };
 
-    if (grammar_matcher_.Find(dictation_lexiconfree_state_)) {
-      VLOG(1) << "    found dictation_lexiconfree_state_";
+    if (grammar_matcher_.Find(dictation_lexiconfree_label_)) {
+      VLOG(1) << "    found dictation_lexiconfree_label_";
       PrefixScore new_next_prefix_score = next_prefix_score;
       new_next_prefix_score.is_in_grammar = false;
       follow_arc(new_next_prefix_score, grammar_matcher_.Value());
@@ -462,7 +416,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
       VLOG(3) << "ComputeFstScores: old: t" << abs_time_step_ << ": " << word;
     }
   }
-  if (all_words == target_string_.substr(0, all_words.size()) && all_words.size() >= 47) {
+  if (false && all_words == target_string_.substr(0, all_words.size()) && all_words.size() >= 47) {
     VLOG(2) << "ComputeFstScores: target: " << all_words;
   }
 
@@ -490,11 +444,11 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
   // Handle free dictation, outside the grammar.
   if (!current_prefix_score.is_in_grammar) {
     grammar_matcher_.SetState(next_prefix_score.grammar_fst_state);
-    CHECK(grammar_matcher_.Find(dictation_end_state_));  // We must have at least one way to end the dictation, and possibly multiple.
+    CHECK(grammar_matcher_.Find(dictation_end_label_));  // We must have at least one way to end the dictation, and possibly multiple.
     auto weight = grammar_matcher_.Value().weight.Value();
     auto nextstate = grammar_matcher_.Value().nextstate;
     CHECK((grammar_matcher_.Next(), grammar_matcher_.Done()));  // Assume deterministic FST.
-    CHECK_EQ(weight, 0);  // We don't support weights on the dictation end arc.
+    CHECK_EQ(weight, 0);  // We don't support weights on the dictation-end arc.
 
     // Recurse, assuming we ended the dictation immediately before receiving this word.
     auto new_current_prefix_score = current_prefix_score;
@@ -572,7 +526,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     CHECK_EQ(dictionary_trie_fst_->NumArcs(nextstate), 0);  // We shouldn't be able to continue after a final state???
     return add_new_next_prefix_score(next_prefix_score, final_weight + FullLikelihood);
 
-  } else {
+  } else {  // (!opts_.process_partial_word_prefixes)
     if (current_prefix.empty() || !IdIsStartOfWord(id)) {
       VLOG(3) << "    return: prefix empty or not start of word";
       return add_new_next_prefix_score(next_prefix_score, FullLikelihood);
@@ -584,7 +538,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     std::vector<std::string> word_pieces;
     std::transform(start_of_word, current_prefix.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
     auto word = JoinString("", word_pieces);
-    if (word.substr(0, 3) == space_symbol_) {
+    if (WordIsStartOfWord(word)) {
       word = word.substr(3);
     }
     auto word_id = word_table_->Find(word);
@@ -598,159 +552,6 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
   }
 
   LOG(FATAL) << "We should never reach here.";
-}
-
-// Computes the negative log likelihood (-infinity..0) of the given prefix + id in the FST.
-float CtcPrefixWfstBeamSearch::ComputeFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score) {
-  // Note: We are never called with the blank unit id.
-
-  if (!current_prefix_score.is_in_grammar) {
-    // FIXME: need to have a way to enable grammar again!
-    return FullLikelihood;
-  }
-
-  // Generate debugging info.
-  auto current_prefix_words = IdsToString(current_prefix);
-  auto all_words = IdsToString(current_prefix, id);
-  if (true) {
-    std::vector<std::string> word_pieces;
-    std::transform(current_prefix.begin(), current_prefix.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
-    word_pieces.emplace_back(unit_table_->Find(id));
-    auto word = JoinString(" | ", word_pieces);
-    static std::set<std::pair<std::vector<int>, int>> seen_combinations;
-    if (seen_combinations.find(std::make_pair(current_prefix, id)) == seen_combinations.end()) {
-      seen_combinations.insert(std::make_pair(current_prefix, id));
-      VLOG(3) << "ComputeFstScore: new: t" << abs_time_step_ << ": " << word;
-    } else {
-      VLOG(3) << "ComputeFstScore: old: t" << abs_time_step_ << ": " << word;
-    }
-  }
-  if (all_words == target_string_.substr(0, all_words.size()) && all_words.size() >= 47) {
-    VLOG(2) << "ComputeFstScore: target: " << all_words;
-  }
-
-  // Check whether the completed word fits in the grammar FST, returning the negative log likelihood.
-  auto check_complete_word = [&](int word_id) {
-    // static std::set<int> seen_word_ids;
-    // if (seen_word_ids.find(word_id) == seen_word_ids.end()) {
-    //   seen_word_ids.insert(word_id);
-    // }
-    VLOG(2) << "ComputeFstScore: check_complete_word: " << word_table_->Find(word_id);
-
-    CHECK_NE(word_id, fst::kNoLabel);
-    auto grammar_fst_state = current_prefix_score.grammar_fst_state != fst::kNoStateId ? current_prefix_score.grammar_fst_state : grammar_fst_->Start();
-    grammar_matcher_.SetState(grammar_fst_state);
-    if (true && grammar_matcher_.Find(0)) {
-      VLOG(0) << "    found epsilon";
-      CHECK(false);  // We don't support this yet.
-    }
-    if (true && grammar_matcher_.Find(dictation_lexiconfree_state_)) {
-      VLOG(1) << "    found dictation_lexiconfree_state_";
-      next_prefix_score.is_in_grammar = false;
-    }
-    else if (!grammar_matcher_.Find(word_id)) {
-      VLOG(3) << "    return: not found at grammar_fst_state " << grammar_fst_state;
-      CHECK(!CheckIfEpsilonPathToILabel<fst::StdArc>(grammar_matcher_, grammar_fst_state, word_id));
-      return NoLikelihood;
-    }
-
-    auto weight = grammar_matcher_.Value().weight.Value();
-    auto nextstate = grammar_matcher_.Value().nextstate;
-    CHECK((grammar_matcher_.Next(), grammar_matcher_.Done()));  // Assume deterministic FST.
-
-    VLOG(1) << "    " << IdsToString(current_prefix, id) << " : grammar_fst_state " << next_prefix_score.grammar_fst_state << " -> " << nextstate;
-    next_prefix_score.SetFstState(nextstate);
-    return -weight;
-  };  // check_complete_word
-
-  // Either handle partial word prefixes, or only complete words.
-  if (opts_.process_partial_word_prefixes) {
-    float final_weight = FullLikelihood;
-    auto dictionary_fst_state = current_prefix_score.dictionary_fst_state != fst::kNoStateId ? current_prefix_score.dictionary_fst_state : dictionary_trie_fst_->Start();
-    auto prefix_word_id = current_prefix_score.prefix_word_id;
-
-    // Check if we are starting a new word, thus guaranteeing that the tail of the prefix is now a complete word.
-    if (!current_prefix.empty() && IdIsStartOfWord(id)) {
-      // We have now completed the previous prefix word. We must have ended the dictionary in a final state. Then we check the completed word.
-      CHECK_NE(dictionary_fst_state, dictionary_trie_fst_->Start());
-      auto word_id = current_prefix_score.prefix_word_id;
-      auto state_is_final = FindFinalState<fst::StdArc>(*dictionary_trie_matcher_, dictionary_fst_state, &dictionary_fst_state, &word_id);
-      if (!state_is_final) {
-        VLOG(3) << "    return: completed word not in dictionary (though it was a valid prefix)";
-        return NoLikelihood;
-      }
-      auto state_final_weight = dictionary_trie_fst_->Final(dictionary_fst_state).Value();
-      final_weight += -state_final_weight + check_complete_word(word_id);
-
-      // Start over fresh for a new word.
-      dictionary_fst_state = dictionary_trie_fst_->Start();
-      prefix_word_id = fst::kNoLabel;
-    }
-
-    // Check whether the current partial word prefix could be a word in the dictionary.
-    auto& matcher = *dictionary_trie_matcher_;
-    matcher.SetState(dictionary_fst_state);
-    if (!matcher.Find(id)) {
-      VLOG(3) << "    return: partial word prefix not in dictionary";
-      CHECK(!CheckIfEpsilonPathToILabel<fst::StdArc>(matcher, dictionary_fst_state, id));
-      return final_weight + NoLikelihood;
-    }
-    auto olabel = matcher.Value().olabel;
-    auto nextstate = matcher.Value().nextstate;
-    // Note: we ignore the weight.
-    CHECK((matcher.Next(), matcher.Done()));  // Assume deterministic FST.
-
-    if (olabel != 0) {
-      CHECK_EQ(prefix_word_id, fst::kNoLabel);  // This should only be set if we are guaranteed not to change word predictions.
-      next_prefix_score.prefix_word_id = olabel;
-    } else {
-      next_prefix_score.prefix_word_id = prefix_word_id;
-    }
-    next_prefix_score.dictionary_fst_state = nextstate;
-    if (opts_.prune_directly_impossible_prefixes || opts_.prune_indirectly_impossible_prefixes) {
-      bool nextstate_is_final = false;
-      if (opts_.prune_indirectly_impossible_prefixes) {
-        nextstate_is_final = FindFinalState<fst::StdArc>(*dictionary_trie_matcher_, nextstate, &nextstate, nullptr);
-      } else if (opts_.prune_directly_impossible_prefixes) {
-        nextstate_is_final = (dictionary_trie_fst_->Final(nextstate).Value() != Weight::Zero());
-      }
-      if (!nextstate_is_final) {
-        VLOG(3) << "    return: partial word prefix okay so far, but not a guaranteed-completed word yet";
-        return final_weight + FullLikelihood;
-      }
-    }
-
-    // Now guaranteed to be a word in the word table.
-    // But adding more units after this one may not be a word, so we must wait for a space character before officially moving forward???
-    CHECK_EQ(dictionary_trie_fst_->NumArcs(nextstate), 0);  // We shouldn't be able to continue after a final state???
-    return final_weight + FullLikelihood;
-
-  } else {
-    if (current_prefix.empty() || !IdIsStartOfWord(id)) {
-      VLOG(3) << "    return: prefix empty or not start of word";
-      return FullLikelihood;
-    }
-
-    // Build the previously-completed word.
-    auto start_of_word_revit = std::find_if(current_prefix.rbegin(), current_prefix.rend(), [this](int id) { return IdIsStartOfWord(id); });
-    auto start_of_word = start_of_word_revit == current_prefix.rend() ? current_prefix.begin() : start_of_word_revit.base() - 1;
-    std::vector<std::string> word_pieces;
-    std::transform(start_of_word, current_prefix.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
-    auto word = JoinString("", word_pieces);
-    if (word.substr(0, 3) == space_symbol_) {
-      word = word.substr(3);
-    }
-    auto word_id = word_table_->Find(word);
-    if (word_id == fst::SymbolTable::kNoSymbol) {
-      VLOG(3) << "    return: not in word_table_";
-      return NoLikelihood;
-    }
-
-    return check_complete_word(word_id);
-  }
-
-  LOG(FATAL) << "We should never reach here.";
-  return NoLikelihood;
 }
 
 bool CtcPrefixWfstBeamSearch::WordIsStartOfWord(const std::string& word) {
@@ -804,7 +605,6 @@ std::unique_ptr<fst::StdVectorFst> CtcPrefixWfstBeamSearch::BuildCharacterDictio
       if (character_id == fst::SymbolTable::kNoSymbol) {
         character_id = character_table.AddSymbol(c);
       }
-      // dictionary.AddArc(current_state, fst::StdArc(character_id, character_id, 0, next_state));
       dictionary.AddArc(current_state, fst::StdArc(character_id, word_id, 0, next_state));
       word_id = 0;  // Epsilon for all but the first arc.
       current_state = next_state;
@@ -854,7 +654,6 @@ void CtcPrefixWfstBeamSearch::BuildUnitDictionaryTrie() {
       }
 
       auto next_state = unit_to_chars_fst.AddState();
-      // unit_to_chars_fst.AddArc(current_state, fst::StdArc(character_id, character_id, 0, next_state));
       unit_to_chars_fst.AddArc(current_state, fst::StdArc(unit_id, character_id, 0, next_state));
       unit_id = 0;  // Epsilon for all but the first arc.
       current_state = next_state;
@@ -865,16 +664,15 @@ void CtcPrefixWfstBeamSearch::BuildUnitDictionaryTrie() {
       unit_to_chars_fst.SetFinal(current_state, fst::StdArc::Weight::One());
       unit_to_chars_fst.AddArc(current_state, fst::StdArc(0, 0, 0, start));  // Loop back to start, to accept a series of units.
     }
-    // if (it.Value() >= 100) break;
   }
 
-  // unit_to_chars_fst.Write("/home/daz/tmp/dictionary_trie_raw_unit_to_chars_fst.fst");
-  // character_dictionary->Write("/home/daz/tmp/dictionary_trie_raw_character_dictionary.fst");
-  // character_table->WriteText("/home/daz/tmp/dictionary_trie_raw_character_table.syms.txt");
+  // unit_to_chars_fst.Write("/tmp/dictionary_trie_raw_unit_to_chars_fst.fst");
+  // character_dictionary->Write("/tmp/dictionary_trie_raw_character_dictionary.fst");
+  // character_table->WriteText("/tmp/dictionary_trie_raw_character_table.syms.txt");
   fst::ArcSort(&unit_to_chars_fst, fst::OLabelCompare<fst::StdArc>());
   fst::StdVectorFst composed_fst;
   fst::Compose(unit_to_chars_fst, *character_dictionary, &composed_fst);
-  // composed_fst.Write("/home/daz/tmp/dictionary_trie_raw.fst");
+  // composed_fst.Write("/tmp/dictionary_trie_raw.fst");
   fst::Connect(&composed_fst);
 
   auto final_dictionary = std::make_unique<fst::StdVectorFst>();
@@ -886,7 +684,7 @@ void CtcPrefixWfstBeamSearch::BuildUnitDictionaryTrie() {
   // fst::MinimizeEncoded(final_dictionary.get());
   fst::RmEpsilon(final_dictionary.get());
   fst::ArcSort(final_dictionary.get(), fst::ILabelCompare<fst::StdArc>());
-  // final_dictionary->Write("/home/daz/tmp/dictionary_trie.fst");
+  // final_dictionary->Write("/tmp/dictionary_trie.fst");
 
   dictionary_trie_fst_ = std::move(final_dictionary);
   dictionary_trie_matcher_ = std::make_unique<CtcPrefixWfstBeamSearch::Matcher>(*dictionary_trie_fst_, fst::MATCH_INPUT);

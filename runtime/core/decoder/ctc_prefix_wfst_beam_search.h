@@ -43,7 +43,8 @@ struct WfstPrefixScore {
   std::vector<int> times_ns;          // times of viterbi none blank path
 
   bool delayed_fst_update = false;
-  std::tuple<const std::vector<int>*, const WfstPrefixScore*, int> delayed_fst_update_token;  // Delayed updates to FST state, each for given current_prefix, current_prefix_score, and word_piece id.
+  // Delayed update to FST state, given: current_prefix, current_prefix_score, and word_piece_id. (For this next_prefix_score, we are pointing back to what was current.)
+  std::tuple<const std::vector<int>*, const WfstPrefixScore*, int> delayed_fst_update_token;
 
   void SetDelayedFstUpdate(const std::vector<int>& prefix, const WfstPrefixScore& prefix_score, int word_piece_id) {
     delayed_fst_update = true;
@@ -108,7 +109,7 @@ struct WfstPrefixHash {
   }
 };
 
-using WfstPrefixState = std::tuple<std::vector<int>, int, int, int>;
+using WfstPrefixState = std::tuple<std::vector<int>, int, int, int>;  // prefix, grammar_fst_state, dictionary_fst_state, prefix_word_id
 
 struct WfstPrefixStateHash {
   static WfstPrefixState make_prefix_state(const std::vector<int>& prefix, const WfstPrefixScore& score) {
@@ -126,17 +127,6 @@ struct WfstPrefixStateHash {
     return hash_code;
   }
 };
-
-// struct WfstPrefixStateHash {
-//   size_t operator()(const WfstPrefixState& prefix_state) const {
-//     auto& prefix = prefix_state.first;
-//     auto& state = prefix_state.second;
-//     static auto wfst_prefix_hash = WfstPrefixHash();
-//     size_t hash_code = wfst_prefix_hash(prefix);
-//     hash_code = state + 31 * hash_code;
-//     return hash_code;
-//   }
-// };
 
 class CtcPrefixWfstBeamSearch : public SearchInterface {
  public:
@@ -195,11 +185,10 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   std::unique_ptr<Matcher> dictionary_trie_matcher_;
 
   const std::string space_symbol_ = kSpaceSymbol;
-  const fst::StdArc::StateId dictation_lexiconfree_state_ = fst::kNoStateId;
-  const fst::StdArc::StateId dictation_end_state_ = fst::kNoStateId;
+  const fst::StdArc::Label dictation_lexiconfree_label_ = fst::kNoLabel;
+  const fst::StdArc::Label dictation_end_label_ = fst::kNoLabel;
 
   void ProcessFstUpdates(HypsMap& next_hyps);
-  float ComputeFstScore(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore& next_prefix_score);
   void ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, std::function<void(PrefixScore&, float)> add_new_next_prefix_score);
   bool WordIsStartOfWord(const std::string& word);
   bool IdIsStartOfWord(int id);

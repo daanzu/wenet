@@ -34,7 +34,6 @@ TorchAsrDecoder::TorchAsrDecoder(
     searcher_.reset(new CtcPrefixBeamSearch(opts.ctc_prefix_search_opts));
   } else if (nullptr != resource->grammar_symbol_table) {
     searcher_.reset(new CtcPrefixWfstBeamSearch(fst_, resource->grammar_symbol_table, resource->unit_table, opts.ctc_prefix_wfst_search_opts));
-    // searcher_.reset(new CtcPrefixWfstBeamSearch(fst_, resource->symbol_table, resource->unit_table, opts.ctc_prefix_wfst_search_opts));
   } else {
     searcher_.reset(new CtcWfstBeamSearch(*fst_, opts.ctc_wfst_search_opts));
   }
