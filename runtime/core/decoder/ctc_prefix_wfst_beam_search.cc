@@ -201,41 +201,70 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
       }
     }
 
-    ProcessFstUpdates(next_hyps);
+    ProcessFstUpdates(next_hyps, false);
 
     // 3. Second beam prune, only keep top n best paths
-    std::vector<std::pair<PrefixState, PrefixScore>> arr(next_hyps.begin(), next_hyps.end());
-    int second_beam_size =
-        std::min(static_cast<int>(arr.size()), opts_.second_beam_size);
-    std::nth_element(arr.begin(), arr.begin() + second_beam_size, arr.end(),
-                     PrefixScoreCompare);
-    arr.resize(second_beam_size);
-    std::sort(arr.begin(), arr.end(), PrefixScoreCompare);
-
     // 4. Update cur_hyps_ and get new result
-    cur_hyps_.clear();
-    hypotheses_.clear();
-    likelihood_.clear();
-    viterbi_likelihood_.clear();
-    times_.clear();
-    for (auto& item : arr) {
-      const auto& prefix = std::get<0>(item.first);
-      VLOG(1) << "end t" << abs_time_step_ << ": " << IdsToString(prefix, -1, 60) << " = " << item.second.score()
-              << "    state=(" << item.second.StateString() << ")"
-              // << "    grammar_fst_state=" << item.second.grammar_fst_state
-              // << "    dict_fst_state=" << item.second.dictionary_fst_state
-              // << "    updates=" << item.second.updates.size()
-              // << "    updates=" << JoinString(" | ", item.second.updates)
-              ;
-      cur_hyps_.emplace(item.first, item.second);
-      hypotheses_.emplace_back(prefix);
-      likelihood_.emplace_back(item.second.score());
-      viterbi_likelihood_.emplace_back(item.second.viterbi_score());
-      times_.emplace_back(item.second.times());
-    }
+    PruneAndUpdateHyps(next_hyps);
     VLOG(1) << "";
   }
   // FIXME: When utterance is complete, we should handle checking for FST Final states.
+}
+
+void CtcPrefixWfstBeamSearch::PruneAndUpdateHyps(const HypsMap& next_hyps) {
+  std::vector<std::pair<PrefixState, PrefixScore>> arr(next_hyps.begin(), next_hyps.end());
+  int second_beam_size =
+      std::min(static_cast<int>(arr.size()), opts_.second_beam_size);
+  std::nth_element(arr.begin(), arr.begin() + second_beam_size, arr.end(),
+                    PrefixScoreCompare);
+  arr.resize(second_beam_size);
+  std::sort(arr.begin(), arr.end(), PrefixScoreCompare);
+  VLOG(1) << "Pruned from " << next_hyps.size() << " hyps to " << arr.size();
+
+  cur_hyps_.clear();
+  hypotheses_.clear();
+  likelihood_.clear();
+  viterbi_likelihood_.clear();
+  times_.clear();
+  for (auto& item : arr) {
+    const auto& prefix = std::get<0>(item.first);
+    VLOG(1) << "end t" << abs_time_step_ << ": " << IdsToString(prefix, -1, 60) << " = " << item.second.score()
+            << "    state=(" << item.second.StateString() << ")"
+            // << "    grammar_fst_state=" << item.second.grammar_fst_state
+            // << "    dict_fst_state=" << item.second.dictionary_fst_state
+            // << "    updates=" << item.second.updates.size()
+            // << "    updates=" << JoinString(" | ", item.second.updates)
+            ;
+    cur_hyps_.emplace(item.first, item.second);
+    hypotheses_.emplace_back(prefix);
+    likelihood_.emplace_back(item.second.score());
+    viterbi_likelihood_.emplace_back(item.second.viterbi_score());
+    times_.emplace_back(item.second.times());
+  }
+}
+
+void CtcPrefixWfstBeamSearch::FinalizeSearch() {
+  // Do final processing: following epsilons, exiting dictation, endpointing words.
+  ProcessFstUpdates(cur_hyps_, true);
+
+  // Add in the grammar final weights, removing any hypotheses that are not final.
+  for (auto it = cur_hyps_.begin(); it != cur_hyps_.end(); /* see below */) {
+    auto& hyp = *it;
+    const auto& prefix_state = hyp.first;
+    const auto& prefix = std::get<0>(prefix_state);
+    PrefixScore& prefix_score = hyp.second;
+    auto grammar_fst_state = prefix_score.grammar_fst_state != fst::kNoStateId ? prefix_score.grammar_fst_state : grammar_fst_->Start();
+    auto final_weight = grammar_fst_->Final(grammar_fst_state);
+    VLOG(1) << "FinalizeSearch: Adding final weight: " << IdsToString(prefix) << " state=" << grammar_fst_state << " final_weight=" << final_weight.Value();
+    if (opts_.strict && final_weight == Weight::Zero()) {
+      it = cur_hyps_.erase(it);
+      continue;
+    }
+    prefix_score.ns += -final_weight.Value();
+    ++it;
+  }
+
+  PruneAndUpdateHyps(cur_hyps_);
 }
 
 void AddCombineToHypsMap(HypsMap& hyps, const PrefixState& prefix_state, const PrefixScore& prefix_score) {
@@ -255,42 +284,44 @@ void AddCombineToHypsMap(HypsMap& hyps, const PrefixState& prefix_state, const P
   }
 }
 
-void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps) {
+void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps, bool final) {
   // Now that we have completed all of the standard CTC processing to compute scores, we can do FST processing, which may modify the FST states and possibly even split a single prefix_score into multiple prefix_scores (due to nondeterministic/epsilon FST transitions).
   // TODO: Is it more efficient to make a new map and copy over, or to modify the existing map (considering no rehashes when erasing but rehashes when inserting)?
   HypsMap new_next_hyps;
   for (auto& hyp : next_hyps) {
     const auto& prefix_state = hyp.first;
     const auto& new_prefix = std::get<0>(prefix_state);
-    PrefixScore& next_score = hyp.second;  // Note: allowed to be non-const because the loop below can only be run once currently. Otherwise, must be const.
+    PrefixScore& next_score = hyp.second;  // Note: allowed to be non-const because it is only used once below, and then we iterate onward and eventually swap.
 
     // Verify that the FST state has not been modified yet, and is still equal to what it was originally copied from.
     CHECK(next_score.grammar_fst_state == std::get<1>(prefix_state) && next_score.dictionary_fst_state == std::get<2>(prefix_state) && next_score.prefix_word_id == std::get<3>(prefix_state));
     // If this hypothesis has no delayed update, we just copy it over to new_next_hyps unmodified.
-    if (!next_score.delayed_fst_update) {
+    if (!next_score.delayed_fst_update && !final) {
       VLOG(2) << "ProcessFstUpdates(0): " << IdsToString(new_prefix, -1, 50) << " " << next_score.grammar_fst_state << " " << next_score.dictionary_fst_state << " " << next_score.prefix_word_id << " = " << next_score.score();
       AddCombineToHypsMap(new_next_hyps, prefix_state, next_score);
       continue;
     }
     VLOG(2) << "ProcessFstUpdates(1): " << IdsToString(new_prefix, -1, 50) << " " << next_score.grammar_fst_state << " " << next_score.dictionary_fst_state << " " << next_score.prefix_word_id << " = " << next_score.score();
 
-    const auto& token = next_score.delayed_fst_update_token;
+    const auto& token = !final ? next_score.delayed_fst_update_token : std::make_tuple(&new_prefix, &next_score, opts_.blank);
     const auto& current_prefix = *std::get<0>(token);
     const auto& current_prefix_score = *std::get<1>(token);
     auto id = std::get<2>(token);
-    CHECK(new_prefix.back() == id && std::equal(current_prefix.begin(), current_prefix.end(), new_prefix.begin()));
-    next_score.delayed_fst_update = false;
+    if (!final) {
+      CHECK(new_prefix.back() == id && std::equal(current_prefix.begin(), current_prefix.end(), new_prefix.begin()));
+      next_score.delayed_fst_update = false;
+    }
 
     auto orig_next_score = next_score;
-    ComputeFstScores(current_prefix, current_prefix_score, id, next_score,
+    ComputeFstScores(current_prefix, current_prefix_score, id, next_score, final,
       [this, &new_next_hyps, &new_prefix, &current_prefix, &orig_next_score, id](PrefixScore& new_next_score, float fst_score) {
         // Warning: this takes new_next_score by reference for efficiency, and its modifications are not intended to be used outside of this function.
         // TODO: Is it more efficient to just take as parameters the new next state, and use a new constructor which takes the new state along with the fst_score to add?
         CHECK_LE(fst_score, 0);
         if (opts_.strict && fst_score <= NoLikelihood) return;  // If in strict mode, drop any scores with no likelihood in the grammar.
         VLOG(2) << "    " << IdsToString(current_prefix, id) << " : grammar_fst_state " << orig_next_score.grammar_fst_state << " -> " << new_next_score.grammar_fst_state;
+        new_next_score.ns += fst_score;  // Both Case 2 & 3 only update .ns, and they are the only ones that add these tokens.
         if (fst_score < FullLikelihood) {
-          new_next_score.ns += fst_score;  // Both Case 2 & 3 only update .ns, and they are the only ones that add these tokens.
           VLOG(2) << "        ns " << orig_next_score.ns << " + " << fst_score << " -> " << new_next_score.ns;
         }
         AddCombineToHypsMap(new_next_hyps, PrefixStateHash::make_prefix_state(new_prefix, new_next_score), new_next_score);
@@ -363,8 +394,9 @@ bool FindFinalState(CtcPrefixWfstBeamSearch::Matcher& matcher, typename Arc::Sta
 }
 
 // Computes the negative log likelihood (-infinity..0) of the given prefix + id in the FST, for the given next_prefix_score (containing the scores to use/pass on), and adds the resulting new next_prefix_score (single or multiple) with updated FST states (and inherited scores) using the given function.
-void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, std::function<void(PrefixScore&, float)> add_new_next_prefix_score) {
-  // Note: We are never called with the blank unit id.
+void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, bool final, std::function<void(PrefixScore&, float)> add_new_next_prefix_score) {
+  // Note: We are never called with the blank unit id, unless we doing final processing.
+  CHECK((id != opts_.blank && id >= 0) != final);  // XOR
 
   // Check whether the completed word fits in the grammar FST, and if so, passes updated prefix_score (following the matching single arc or multiple arcs) (along with the negative log likelihood) to given handler. Only needs to handle grammar_fst, because it only considers complete words. Also handles transitioning to dictation.
   auto check_complete_word = [this, &current_prefix_score](const PrefixScore& next_prefix_score, int word_id, std::function<void(PrefixScore&, float)> add_new_next_prefix_score) {
@@ -403,7 +435,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
   // Generate debugging info.
   auto current_prefix_words = IdsToString(current_prefix);
   auto all_words = IdsToString(current_prefix, id);
-  if (false) {
+  if (false && id != -1) {
     std::vector<std::string> word_pieces;
     std::transform(current_prefix.begin(), current_prefix.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
     word_pieces.emplace_back(unit_table_->Find(id));
@@ -433,7 +465,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
       // Recurse, following epsilon transitions.
       FollowEpsilons(grammar_matcher_, current_prefix_score, 0, 
         [&](PrefixScore& new_current_prefix_score, float weight) {
-          ComputeFstScores(current_prefix, new_current_prefix_score, id, next_prefix_score, add_new_next_prefix_score);
+          ComputeFstScores(current_prefix, new_current_prefix_score, id, next_prefix_score, final, add_new_next_prefix_score);
         }
       );
       return;
@@ -443,7 +475,8 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
 
   // Handle free dictation, outside the grammar.
   if (!current_prefix_score.is_in_grammar) {
-    grammar_matcher_.SetState(next_prefix_score.grammar_fst_state);
+    auto grammar_fst_state = next_prefix_score.grammar_fst_state != fst::kNoStateId ? next_prefix_score.grammar_fst_state : grammar_fst_->Start();
+    grammar_matcher_.SetState(grammar_fst_state);
     CHECK(grammar_matcher_.Find(dictation_end_label_));  // We must have at least one way to end the dictation, and possibly multiple.
     auto weight = grammar_matcher_.Value().weight.Value();
     auto nextstate = grammar_matcher_.Value().nextstate;
@@ -457,10 +490,12 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     auto new_next_prefix_score = next_prefix_score;
     new_next_prefix_score.grammar_fst_state = nextstate;
     new_next_prefix_score.is_in_grammar = true;
-    ComputeFstScores(current_prefix, new_current_prefix_score, id, new_next_prefix_score, add_new_next_prefix_score);
+    ComputeFstScores(current_prefix, new_current_prefix_score, id, new_next_prefix_score, final, add_new_next_prefix_score);
 
     // Finally, just absorb the new word, without ending the dictation.
-    add_new_next_prefix_score(next_prefix_score, -opts_.dictation_wordpiece_insertion_penalty);
+    if (!final) {
+      add_new_next_prefix_score(next_prefix_score, -opts_.dictation_wordpiece_insertion_penalty);
+    }
     return;
   }
 
@@ -527,7 +562,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     return add_new_next_prefix_score(next_prefix_score, final_weight + FullLikelihood);
 
   } else {  // (!opts_.process_partial_word_prefixes)
-    if (current_prefix.empty() || !IdIsStartOfWord(id)) {
+    if (current_prefix.empty() || !(final || IdIsStartOfWord(id))) {
       VLOG(3) << "    return: prefix empty or not start of word";
       return add_new_next_prefix_score(next_prefix_score, FullLikelihood);
     }
@@ -691,8 +726,7 @@ void CtcPrefixWfstBeamSearch::BuildUnitDictionaryTrie() {
 }
 
 // TODO:
+// - update implementation for partial-word-prefixes to work with latest changes.
 // - lexicon-bonus mode: don't restrict to only the lexicon, but give bonus to lexicon words.
-// - final states: upon end of utterance
-//   - epsilon transitions
 
 }  // namespace wenet

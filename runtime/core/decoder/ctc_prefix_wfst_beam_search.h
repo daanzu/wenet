@@ -56,17 +56,6 @@ struct WfstPrefixScore {
   fst::StdArc::StateId dictionary_fst_state = fst::kNoStateId;
   fst::StdArc::Label prefix_word_id = fst::kNoLabel;  // This may be entirely dependent on dictionary_fst_state, and not path-dependent, but I am not completely sure.
 
-  void SetFstState(fst::StdArc::StateId state) {
-    // if (grammar_fst_state != fst::kNoStateId) {
-      // LOG(FATAL) << "grammar_fst_state is already set";
-      // if (grammar_fst_state != state) {
-      // if (grammar_fst_state > state) {
-      //   LOG(FATAL) << "grammar_fst_state is already set to " << grammar_fst_state << " not " << state;
-      // }
-    // }
-    grammar_fst_state = state;
-  }
-
   bool StatesEqual(const WfstPrefixScore& other) const {
     return grammar_fst_state == other.grammar_fst_state
       && is_in_grammar == other.is_in_grammar
@@ -141,8 +130,7 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
 
   void Search(const torch::Tensor& logp) override;
   void Reset() override;
-  // CtcPrefixWfstBeamSearch do nothing at FinalizeSearch
-  void FinalizeSearch() override {}
+  void FinalizeSearch() override;
   SearchType Type() const override { return SearchType::kPrefixWfstBeamSearch; }
 
   const std::vector<std::vector<int>>& hypotheses() const {
@@ -188,8 +176,9 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   const fst::StdArc::Label dictation_lexiconfree_label_ = fst::kNoLabel;
   const fst::StdArc::Label dictation_end_label_ = fst::kNoLabel;
 
-  void ProcessFstUpdates(HypsMap& next_hyps);
-  void ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, std::function<void(PrefixScore&, float)> add_new_next_prefix_score);
+  void PruneAndUpdateHyps(const HypsMap& next_hyps);
+  void ProcessFstUpdates(HypsMap& next_hyps, bool final);
+  void ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, bool final, std::function<void(PrefixScore&, float)> add_new_next_prefix_score);
   bool WordIsStartOfWord(const std::string& word);
   bool IdIsStartOfWord(int id);
   std::string IdsToString(const std::vector<int> ids, int extra_id = -1, int max_len = -1);
