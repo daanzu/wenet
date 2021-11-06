@@ -53,25 +53,25 @@ FetchContent_Declare(boost
 FetchContent_MakeAvailable(boost)
 include_directories(${boost_SOURCE_DIR})
 
-# third_party: libtorch 1.6.0, use FetchContent_Declare to download, and
+# third_party: libtorch use FetchContent_Declare to download, and
 # use find_package to find since libtorch is not a standard cmake project
-set(PYTORCH_VERSION "1.6.0")
+set(PYTORCH_VERSION "1.10.0")
 if(${CMAKE_SYSTEM_NAME} STREQUAL "Windows")
     set(LIBTORCH_URL "https://download.pytorch.org/libtorch/cpu/libtorch-win-shared-with-deps-${PYTORCH_VERSION}%2Bcpu.zip")
-    set(URL_HASH "SHA256=dacb2af654f1cffa43b0f3187ce945e1c93305b4c8bb60361c7a8cb543e1da82")
+    set(URL_HASH "SHA256=d7043b7d7bdb5463e5027c896ac21b83257c32c533427d4d0d7b251548db8f4b")
     set(CMAKE_BUILD_TYPE "Release")
 elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
     if($ENV{WENET_LINUX_C11ABI} MATCHES "0")
       # https://discuss.pytorch.org/t/issues-linking-with-libtorch-c-11-abi/29510
       set(LIBTORCH_URL "https://download.pytorch.org/libtorch/cpu/libtorch-shared-with-deps-${PYTORCH_VERSION}%2Bcpu.zip")
-      set(URL_HASH "SHA256=31d3c5a59b1394f9d958501e392cedc91476358accea76c7094d103e9335b80c")
+      set(URL_HASH "SHA256=16961222938b205a6a767b0b0b9f5e3b1f8740aa1f3475580e33cfd5952b1a44")
     else()
       set(LIBTORCH_URL "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-${PYTORCH_VERSION}%2Bcpu.zip")
-      set(URL_HASH "SHA256=c6c0d3a87039338f7812a1ae343b9e48198536f20d1415b0e5a9a15ba7b90b3f")
+      set(URL_HASH "SHA256=6d7be1073d1bd76f6563572b2aa5548ad51d5bc241d6895e3181b7dc25554426")
     endif()
 elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")
     set(LIBTORCH_URL "https://download.pytorch.org/libtorch/cpu/libtorch-macos-${PYTORCH_VERSION}.zip")
-    set(URL_HASH "SHA256=e1140bed7bd56c26638bae28aebbdf68e588a9fae92c6684645bcdd996e4183c")
+    set(URL_HASH "SHA256=07cac2c36c34f13065cb9559ad5270109ecbb468252fb0aeccfd89322322a2b5")
 else()
     message(FATAL_ERROR "Unsupported CMake System Name '${CMAKE_SYSTEM_NAME}' (expected 'Windows', 'Linux' or 'Darwin')")
 endif()
@@ -121,7 +121,7 @@ else()
   file(GLOB TORCH_DLLS "${TORCH_INSTALL_PREFIX}/lib/*.dll")
   file(COPY ${TORCH_DLLS} DESTINATION ${CMAKE_BINARY_DIR})
   FetchContent_Declare(openfst
-    URL      https://github.com.cnpmjs.org/kkm000/openfst/archive/refs/tags/win/1.6.5.1.tar.gz
+    URL      https://github.com/kkm000/openfst/archive/refs/tags/win/1.6.5.1.tar.gz
     URL_HASH SHA256=02c49b559c3976a536876063369efc0e41ab374be1035918036474343877046e
   )
   FetchContent_MakeAvailable(openfst)
@@ -144,17 +144,27 @@ add_subdirectory(kaldi)
 
 # decoder
 add_library(decoder STATIC
+  decoder/context_graph.cc
   decoder/ctc_prefix_beam_search.cc
   decoder/ctc_wfst_beam_search.cc
   decoder/ctc_endpoint.cc
   decoder/torch_asr_decoder.cc
   decoder/torch_asr_model.cc
 )
-target_link_libraries(decoder PUBLIC ${TORCH_LIBRARIES} kaldi-decoder utils)
+target_link_libraries(decoder PUBLIC ${TORCH_LIBRARIES} kaldi-decoder utils post_processor)
 
 add_executable(ctc_prefix_beam_search_test decoder/ctc_prefix_beam_search_test.cc)
 target_link_libraries(ctc_prefix_beam_search_test PUBLIC gtest_main gmock decoder)
 add_test(CTC_PREFIX_BEAM_SEARCH_TEST ctc_prefix_beam_search_test)
+
+# post_processor
+add_library(post_processor STATIC
+  post_processor/post_processor.cc
+)
+target_link_libraries(post_processor PUBLIC utils)
+add_executable(post_processor_test post_processor/post_processor_test.cc)
+target_link_libraries(post_processor_test PUBLIC post_processor gtest_main gmock)
+add_test(POST_PROCESSOR_TEST post_processor_test)
 
 # websocket
 if(WENET_WEBSOCKET)
@@ -164,7 +174,6 @@ if(WENET_WEBSOCKET)
   )
   target_link_libraries(websocket PUBLIC decoder frontend)
 endif(WENET_WEBSOCKET)
-
 
 # binary
 add_executable(decoder_main bin/decoder_main.cc)

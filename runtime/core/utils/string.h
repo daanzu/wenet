@@ -15,8 +15,13 @@
 #ifndef UTILS_STRING_H_
 #define UTILS_STRING_H_
 
+#include <memory>
 #include <string>
 #include <vector>
+#include <locale>
+#include <codecvt>
+
+#include "fst/symbol-table.h"
 
 namespace wenet {
 
@@ -37,6 +42,8 @@ void SplitStringToVector(const std::string& full, const char* delim,
 void SplitUTF8StringToChars(const std::string& str,
                             std::vector<std::string>* chars);
 
+int UTF8StringLength(const std::string& str);
+
 // Check whether the UTF-8 char is alphabet or '.
 bool CheckEnglishChar(const std::string& ch);
 
@@ -46,12 +53,15 @@ bool CheckEnglishWord(const std::string& word);
 std::string JoinString(const std::string& c,
                        const std::vector<std::string>& strs);
 
-// Split the UTF-8 string into words.
-void SplitUTF8StringToWords(const std::string& str,
-                            std::vector<std::string>* words);
+// Split the UTF-8 string into words by symbol table.
+// Return whether not contains oov.
+bool SplitUTF8StringToWords(
+    const std::string& str,
+    const std::shared_ptr<fst::SymbolTable>& symbol_table,
+    std::vector<std::string>* words);
 
 // Replace ▁ with space, then remove head, tail and consecutive space.
-std::string ProcessBlank(const std::string& str);
+std::string ProcessBlank(const std::string& str, bool lowercase);
 
 std::string Ltrim(const std::string& str);
 
