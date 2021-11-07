@@ -172,10 +172,16 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
                     --result_file $test_dir/text_bpe \
                     --ctc_weight $ctc_weight \
                     ${decoding_chunk_size:+--decoding_chunk_size $decoding_chunk_size}
-                tools/spm_decode --model=${bpemodel}.model --input_format=piece < $test_dir/text_bpe | sed -e "s/▁/ /g" > $test_dir/text
+
+                cut -f2- -d " " $test_dir/text_bpe > $test_dir/text_bpe_value_tmp
+                cut -f1 -d " " $test_dir/text_bpe > $test_dir/text_bpe_key_tmp
+                tools/spm_decode --model=${bpemodel}.model --input_format=piece \
+                  < $test_dir/text_bpe_value_tmp | sed -e "s/▁/ /g" > $test_dir/text_value_tmp
+                paste -d " " $test_dir/text_bpe_key_tmp $test_dir/text_value_tmp > $test_dir/text
+
                 python tools/compute-wer.py --char=1 --v=1 \
                     $wave_data/$test/text $test_dir/text > $test_dir/wer
-            } &
+            } #&
 
             ((idx+=1))
             if [ $idx -eq $num_gpus ]; then
@@ -194,6 +200,7 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
         --config $dir/train.yaml \
         --checkpoint $dir/avg_${average_num}.pt \
         --output_file $dir/final.zip
+    cp $dict $dir/words.txt
 fi
 
 # Optionally, you can add LM and test it with runtime.
