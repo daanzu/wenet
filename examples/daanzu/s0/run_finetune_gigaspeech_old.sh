@@ -6,7 +6,7 @@
 
 # Use this to control how many gpu you use, It's 1-gpu training if you specify
 # just 1gpu, otherwise it's is multiple gpu training based on DDP in pytorch
-export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+export CUDA_VISIBLE_DEVICES="0"
 stage=0 # start from 0 if you need to start from data preparation
 stop_stage=5
 
@@ -40,6 +40,18 @@ cmvn=false
 do_delta=false
 dir=exp/sp_spec_aug
 
+# Fine tuning
+train_set=train_concat10upper_90train
+dev_set=train_concat10upper_10dev
+name=gigaspeech_train_u2pp_conformer_train
+train_config=conf/finetune_${name}.yaml
+name=20210728_u2pp_conformer_exp
+train_config=exp/20210728_u2pp_conformer_exp/train_u2++_conformer.yaml
+cmvn=true
+dir=exp/finetune_${train_set}_${name}_new
+base_model=exp/20210728_u2pp_conformer_exp/final.pt
+checkpoint=$dir/0.pt
+
 # use average_checkpoint will get better result
 average_checkpoint=true
 decode_checkpoint=$dir/final.pt
@@ -48,6 +60,8 @@ average_num=3
 decode_modes="attention_rescoring ctc_greedy_search"
 
 . tools/parse_options.sh || exit 1;
+
+base_model_dir=`dirname $base_model`
 
 # bpemode (unigram or bpe)
 nbpe=5000
@@ -119,13 +133,16 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     wc -l ${dict}
 fi
 
+dict=$base_model_dir/words.txt
+bpemodel=$base_model_dir/train_xl_unigram5000
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     # Prepare wenet requried data
     echo "Prepare data, prepare requried format"
-    for x in $train_dev $train_set $recog_set; do
+    for x in $dev_set $train_set; do
+        mkdir -p $wave_data/finetune/$x
         tools/format_data.sh --nj ${nj} \
-            --feat-type opus --feat $wave_data/gigaspeech_$x/wav.scp --bpecode ${bpemodel}.model \
-            $wave_data/gigaspeech_$x ${dict} > $wave_data/gigaspeech_$x/format.data
+            --feat-type wav --feat $wave_data/$x/wav.scp --bpecode ${bpemodel}.model \
+            $wave_data/$x ${dict} > $wave_data/finetune/$x/format.data
 
     done
 
@@ -148,29 +165,61 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     world_size=`expr $num_gpus \* $num_nodes`
     echo "total gpus is: $world_size"
     cmvn_opts=
-    $cmvn && cp ${feat_dir}/${train_set}/global_cmvn $dir
+    # $cmvn && cp ${feat_dir}/${train_set}/global_cmvn $dir
+    $cmvn && cp ${base_model_dir}/global_cmvn $dir
     $cmvn && cmvn_opts="--cmvn ${dir}/global_cmvn"
     # train.py will write $train_config to $dir/train.yaml with model input
     # and output dimension, train.yaml will be used for inference or model
     # export later
     for ((i = 0; i < $num_gpus; ++i)); do
     {
+        echo "num_gpus: $num_gpus"
         gpu_id=$(echo $CUDA_VISIBLE_DEVICES | cut -d',' -f$[$i+1])
         # Rank of each gpu/process used for knowing whether it is
         # the master of a worker.
-        rank=`expr $node_rank \* $num_gpus + $i`
+        # rank=`expr $node_rank \* $num_gpus + $i`
+
+        [ ! -f $base_model ] && \
+            echo "Please use a pretrained model for finetuning" && exit 0
+        [ ! -f $checkpoint ] && \
+            cp $base_model $checkpoint && \
+            cp $base_model_dir/train.yaml $dir/0.yaml
+        # echo "--gpu $gpu_id \
+        #     --config $train_config \
+        #     --train_data $wave_data/finetune/${train_set}/format.data \
+        #     --cv_data $wave_data/finetune/${dev_set}/format.data \
+        #     ${checkpoint:+--checkpoint $checkpoint} \
+        #     --model_dir $dir \
+        #     --num_workers 4 \
+        #     $cmvn_opts"
         python wenet/bin/train.py --gpu $gpu_id \
             --config $train_config \
-            --train_data $wave_data/gigaspeech_$train_set/format.data \
-            --cv_data $wave_data/gigaspeech_$train_dev/format.data \
+            --train_data $wave_data/finetune/${train_set}/format.data \
+            --cv_data $wave_data/finetune/${dev_set}/format.data \
             ${checkpoint:+--checkpoint $checkpoint} \
             --model_dir $dir \
-            --ddp.init_method $init_method \
-            --ddp.world_size $world_size \
-            --ddp.rank $rank \
-            --ddp.dist_backend $dist_backend \
-            --num_workers 16 \
+            --num_workers 4 \
             $cmvn_opts
+            # --ddp.init_method $init_method \
+            # --ddp.world_size $world_size \
+            # --ddp.rank $rank \
+            # --ddp.dist_backend $dist_backend \
+            # --data_type $data_type \
+            # --symbol_table $dict \
+            # --pin_memory
+
+        # python wenet/bin/train.py --gpu $gpu_id \
+        #     --config $train_config \
+        #     --train_data $wave_data/gigaspeech_$train_set/format.data \
+        #     --cv_data $wave_data/gigaspeech_$train_dev/format.data \
+        #     ${checkpoint:+--checkpoint $checkpoint} \
+        #     --model_dir $dir \
+        #     --ddp.init_method $init_method \
+        #     --ddp.world_size $world_size \
+        #     --ddp.rank $rank \
+        #     --ddp.dist_backend $dist_backend \
+        #     --num_workers 16 \
+        #     $cmvn_opts
     } &
     done
     wait
