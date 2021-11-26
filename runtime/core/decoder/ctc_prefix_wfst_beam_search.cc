@@ -40,7 +40,7 @@ CtcPrefixWfstBeamSearch::CtcPrefixWfstBeamSearch(
     const CtcPrefixWfstBeamSearchOptions& opts)
     : opts_(opts),
       grammar_fst_(fst),
-      grammar_matcher_(*grammar_fst_, fst::MATCH_INPUT),
+      grammar_matcher_(std::make_unique<CtcPrefixWfstBeamSearch::Matcher>(*grammar_fst_, fst::MATCH_INPUT)),
       word_table_(word_table),
       unit_table_(unit_table),
       dictation_lexiconfree_label_(
@@ -66,6 +66,12 @@ void CtcPrefixWfstBeamSearch::Reset() {
   prefix_score.v_ns = 0.0;
   std::vector<int> empty;
   cur_hyps_.emplace(PrefixStateHash::make_prefix_state(empty, prefix_score), prefix_score);
+}
+
+void CtcPrefixWfstBeamSearch::ResetFst(std::shared_ptr<fst::StdFst> fst) {
+  Reset();
+  grammar_fst_ = fst;
+  grammar_matcher_.reset(new CtcPrefixWfstBeamSearch::Matcher(*grammar_fst_, fst::MATCH_INPUT));
 }
 
 static bool PrefixScoreCompare(
@@ -410,7 +416,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
 
     CHECK_NE(word_id, fst::kNoLabel);
     auto grammar_fst_state = current_prefix_score.grammar_fst_state != fst::kNoStateId ? current_prefix_score.grammar_fst_state : grammar_fst_->Start();
-    grammar_matcher_.SetState(grammar_fst_state);
+    grammar_matcher_->SetState(grammar_fst_state);
 
     auto follow_arc = [&add_new_next_prefix_score](PrefixScore& new_next_prefix_score, const fst::StdArc& arc) {
       auto weight = arc.weight.Value();
@@ -419,18 +425,18 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
       add_new_next_prefix_score(new_next_prefix_score, -weight);
     };
 
-    if (grammar_matcher_.Find(dictation_lexiconfree_label_)) {
+    if (grammar_matcher_->Find(dictation_lexiconfree_label_)) {
       VLOG(1) << "    found dictation_lexiconfree_label_";
       PrefixScore new_next_prefix_score = next_prefix_score;
       new_next_prefix_score.is_in_grammar = false;
-      follow_arc(new_next_prefix_score, grammar_matcher_.Value());
-      CHECK((grammar_matcher_.Next(), grammar_matcher_.Done()));  // Assume deterministic FST.
+      follow_arc(new_next_prefix_score, grammar_matcher_->Value());
+      CHECK((grammar_matcher_->Next(), grammar_matcher_->Done()));  // Assume deterministic FST.
     }
 
-    grammar_matcher_.Find(word_id);
-    for (; !grammar_matcher_.Done(); grammar_matcher_.Next()) {
+    grammar_matcher_->Find(word_id);
+    for (; !grammar_matcher_->Done(); grammar_matcher_->Next()) {
       PrefixScore new_next_prefix_score = next_prefix_score;
-      follow_arc(new_next_prefix_score, grammar_matcher_.Value());
+      follow_arc(new_next_prefix_score, grammar_matcher_->Value());
     }
   };  // check_complete_word()
 
@@ -461,11 +467,11 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
   // Handle epsilon transitions at beginning of this-time-step processing, rather than at the end of the previous time step.
   if (true) {
     auto grammar_fst_state = current_prefix_score.grammar_fst_state != fst::kNoStateId ? current_prefix_score.grammar_fst_state : grammar_fst_->Start();
-    grammar_matcher_.SetState(grammar_fst_state);
+    grammar_matcher_->SetState(grammar_fst_state);
     // Check if we have any epsilon transitions.
-    if (grammar_matcher_.Find(0)) {
+    if (grammar_matcher_->Find(0)) {
       // Recurse, following epsilon transitions.
-      FollowEpsilons(grammar_matcher_, current_prefix_score, 0, 
+      FollowEpsilons(*grammar_matcher_, current_prefix_score, 0, 
         [&](PrefixScore& new_current_prefix_score, float weight) {
           ComputeFstScores(current_prefix, new_current_prefix_score, id, next_prefix_score, final, add_new_next_prefix_score);
         }
@@ -478,11 +484,11 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
   // Handle free dictation, outside the grammar.
   if (!current_prefix_score.is_in_grammar) {
     auto grammar_fst_state = next_prefix_score.grammar_fst_state != fst::kNoStateId ? next_prefix_score.grammar_fst_state : grammar_fst_->Start();
-    grammar_matcher_.SetState(grammar_fst_state);
-    CHECK(grammar_matcher_.Find(dictation_end_label_));  // We must have at least one way to end the dictation, and possibly multiple.
-    auto weight = grammar_matcher_.Value().weight.Value();
-    auto nextstate = grammar_matcher_.Value().nextstate;
-    CHECK((grammar_matcher_.Next(), grammar_matcher_.Done()));  // Assume deterministic FST.
+    grammar_matcher_->SetState(grammar_fst_state);
+    CHECK(grammar_matcher_->Find(dictation_end_label_));  // We must have at least one way to end the dictation, and possibly multiple.
+    auto weight = grammar_matcher_->Value().weight.Value();
+    auto nextstate = grammar_matcher_->Value().nextstate;
+    CHECK((grammar_matcher_->Next(), grammar_matcher_->Done()));  // Assume deterministic FST.
     CHECK_EQ(weight, 0);  // We don't support weights on the dictation-end arc.
 
     // Recurse, assuming we ended the dictation immediately before receiving this word.
