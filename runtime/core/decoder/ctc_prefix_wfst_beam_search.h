@@ -165,12 +165,12 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
 
   const CtcPrefixWfstBeamSearchOptions& opts_;
 
-  std::shared_ptr<fst::StdFst> grammar_fst_;
+  std::shared_ptr<fst::StdFst> grammar_fst_ = nullptr;
   Matcher grammar_matcher_;
-  std::shared_ptr<fst::SymbolTable> word_table_;
-  std::shared_ptr<fst::SymbolTable> unit_table_;
-  std::unique_ptr<fst::StdFst> dictionary_trie_fst_;  // unit->word transducer
-  std::unique_ptr<Matcher> dictionary_trie_matcher_;
+  std::shared_ptr<fst::SymbolTable> word_table_ = nullptr;
+  std::shared_ptr<fst::SymbolTable> unit_table_ = nullptr;
+  std::unique_ptr<fst::StdFst> dictionary_trie_fst_ = nullptr;  // unit->word transducer
+  std::unique_ptr<Matcher> dictionary_trie_matcher_ = nullptr;
 
   const std::string space_symbol_ = kSpaceSymbol;
   const fst::StdArc::Label dictation_lexiconfree_label_ = fst::kNoLabel;

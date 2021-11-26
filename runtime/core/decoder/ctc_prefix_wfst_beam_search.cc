@@ -31,7 +31,7 @@ constexpr float SuperNoLikelihood = -std::numeric_limits<float>::infinity();
 constexpr float NoLikelihood = -std::numeric_limits<float>::max();
 constexpr float FullLikelihood = 0.0f;
 
-std::string target_string_ = "";
+std::string target_string_;
 
 CtcPrefixWfstBeamSearch::CtcPrefixWfstBeamSearch(
     std::shared_ptr<fst::StdFst> fst,
@@ -46,7 +46,9 @@ CtcPrefixWfstBeamSearch::CtcPrefixWfstBeamSearch(
       dictation_lexiconfree_label_(
           word_table->Find("#NONTERM:DICTATION_LEXICONFREE")),
       dictation_end_label_(word_table->Find("#NONTERM:END")) {
-  BuildUnitDictionaryTrie();
+  if (opts_.process_partial_word_prefixes) {
+    BuildUnitDictionaryTrie();
+  }
   Reset();
 }
 
