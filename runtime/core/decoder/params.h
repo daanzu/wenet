@@ -6,11 +6,16 @@
 #define DECODER_PARAMS_H_
 
 #include <memory>
+#include <utility>
+#include <string>
+#include <vector>
 
 #include "decoder/torch_asr_decoder.h"
 #include "decoder/torch_asr_model.h"
 #include "frontend/feature_pipeline.h"
+#include "post_processor/post_processor.h"
 #include "utils/flags.h"
+#include "utils/string.h"
 
 // TorchAsrModel flags
 DEFINE_int32(num_threads, 1, "num threads for GEMM");
@@ -41,7 +46,7 @@ DEFINE_double(lattice_beam, 10.0, "lattice beam in ctc wfst search");
 DEFINE_double(acoustic_scale, 1.0, "acoustic scale for ctc wfst search");
 DEFINE_double(blank_skip_thresh, 1.0,
               "blank skip thresh for ctc wfst search, 1.0 means no skip");
-DEFINE_int32(nbest, 10, "nbest for ctc wfst search");
+DEFINE_int32(nbest, 10, "nbest for ctc wfst or prefix search");
 
 // SymbolTable flags
 DEFINE_string(dict_path, "",
@@ -49,12 +54,22 @@ DEFINE_string(dict_path, "",
               "use LM in decoding");
 DEFINE_string(
     unit_path, "",
-    "e2e model unit symbol table, used for get timestamp of the result");
+    "e2e model unit symbol table, is used to get timestamp of the result");
 DEFINE_string(
-    grammar_symbol_path, "", "");
+    grammar_symbol_path, "", "grammar symbol table path, for CtcPrefixWfstBeamSearch");
+
+// Context flags
+DEFINE_string(context_path, "", "context path, is used to build context graph");
+DEFINE_double(context_score, 3.0, "is used to rescore the decoded result");
+
+// PostProcessOptions flags
+DEFINE_int32(language_type, 0,
+             "remove spaces according to language type"
+             "0x00 = kMandarinEnglish, "
+             "0x01 = kIndoEuropean");
+DEFINE_bool(lowercase, true, "lowercase final result if needed");
 
 namespace wenet {
-
 std::shared_ptr<FeaturePipelineConfig> InitFeaturePipelineConfigFromFlags() {
   auto feature_config = std::make_shared<FeaturePipelineConfig>(
       FLAGS_num_bins, FLAGS_sample_rate);
@@ -76,6 +91,8 @@ std::shared_ptr<DecodeOptions> InitDecodeOptionsFromFlags() {
   decode_config->ctc_wfst_search_opts.blank_skip_thresh =
       FLAGS_blank_skip_thresh;
   decode_config->ctc_wfst_search_opts.nbest = FLAGS_nbest;
+  decode_config->ctc_prefix_search_opts.first_beam_size = FLAGS_nbest;
+  decode_config->ctc_prefix_search_opts.second_beam_size = FLAGS_nbest;
   return decode_config;
 }
 
@@ -111,6 +128,27 @@ std::shared_ptr<DecodeResource> InitDecodeResourceFromFlags() {
     unit_table = symbol_table;
   }
   resource->unit_table = unit_table;
+
+  if (!FLAGS_context_path.empty()) {
+    LOG(INFO) << "Reading context " << FLAGS_context_path;
+    std::vector<std::string> contexts;
+    std::ifstream infile(FLAGS_context_path);
+    std::string context;
+    while (getline(infile, context)) {
+      contexts.emplace_back(Trim(context));
+    }
+    ContextConfig config;
+    config.context_score = FLAGS_context_score;
+    resource->context_graph = std::make_shared<ContextGraph>(config);
+    resource->context_graph->BuildContextGraph(contexts, symbol_table);
+  }
+
+  PostProcessOptions post_process_opts;
+  post_process_opts.language_type =
+    FLAGS_language_type == 0 ? kMandarinEnglish : kIndoEuropean;
+  post_process_opts.lowercase = FLAGS_lowercase;
+  resource->post_processor =
+    std::make_shared<PostProcessor>(std::move(post_process_opts));
 
   if (!FLAGS_grammar_symbol_path.empty()) {
     LOG(INFO) << "Reading grammar words table " << FLAGS_grammar_symbol_path;
