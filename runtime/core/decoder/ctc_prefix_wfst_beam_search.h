@@ -25,6 +25,8 @@ struct CtcPrefixWfstBeamSearchOptions {
   int blank = 0;  // blank id
   int first_beam_size = 10;
   int second_beam_size = 10;
+  string dictation_lexiconfree_label = "#NONTERM:DICTATION_LEXICONFREE";
+  string dictation_end_label = "#NONTERM:END";
   bool strict = true;
   bool process_partial_word_prefixes = false;
   bool prune_directly_impossible_prefixes = true;

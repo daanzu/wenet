@@ -43,9 +43,8 @@ CtcPrefixWfstBeamSearch::CtcPrefixWfstBeamSearch(
       grammar_matcher_(std::make_unique<CtcPrefixWfstBeamSearch::Matcher>(*grammar_fst_, fst::MATCH_INPUT)),
       word_table_(word_table),
       unit_table_(unit_table),
-      dictation_lexiconfree_label_(
-          word_table->Find("#NONTERM:DICTATION_LEXICONFREE")),
-      dictation_end_label_(word_table->Find("#NONTERM:END")) {
+      dictation_lexiconfree_label_(word_table->Find(opts_.dictation_lexiconfree_label)),
+      dictation_end_label_(word_table->Find(opts_.dictation_end_label)) {
   if (opts_.process_partial_word_prefixes) {
     BuildUnitDictionaryTrie();
   }
