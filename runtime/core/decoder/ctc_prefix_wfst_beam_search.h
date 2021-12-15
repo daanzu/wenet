@@ -165,7 +165,7 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   // Map from prefix to its score
   HypsMap cur_hyps_;
 
-  const CtcPrefixWfstBeamSearchOptions& opts_;
+  const CtcPrefixWfstBeamSearchOptions opts_;
 
   std::shared_ptr<fst::StdFst> grammar_fst_ = nullptr;
   std::unique_ptr<Matcher> grammar_matcher_ = nullptr;
