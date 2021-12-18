@@ -120,6 +120,8 @@ class TorchAsrDecoder {
   }
   const std::vector<DecodeResult>& result() const { return result_; }
 
+  SearchInterface& get_searcher() { return *searcher_; }
+
  private:
   // Return true if we reach the end of the feature pipeline
   DecodeState AdvanceDecoding();
