@@ -424,7 +424,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
       add_new_next_prefix_score(new_next_prefix_score, -weight);
     };
 
-    if (grammar_matcher_->Find(dictation_lexiconfree_label_)) {
+    if (dictation_lexiconfree_label_ != fst::kNoLabel && grammar_matcher_->Find(dictation_lexiconfree_label_)) {
       VLOG(1) << "    found dictation_lexiconfree_label_";
       PrefixScore new_next_prefix_score = next_prefix_score;
       new_next_prefix_score.is_in_grammar = false;
@@ -483,7 +483,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
   if (!current_prefix_score.is_in_grammar) {
     auto grammar_fst_state = next_prefix_score.grammar_fst_state != fst::kNoStateId ? next_prefix_score.grammar_fst_state : grammar_fst_->Start();
     grammar_matcher_->SetState(grammar_fst_state);
-    CHECK(grammar_matcher_->Find(dictation_end_label_));  // We must have at least one way to end the dictation, and possibly multiple.
+    CHECK(dictation_end_label_ != fst::kNoLabel && grammar_matcher_->Find(dictation_end_label_));  // We must have at least one way to end the dictation, and possibly multiple.
     auto weight = grammar_matcher_->Value().weight.Value();
     auto nextstate = grammar_matcher_->Value().nextstate;
     CHECK((grammar_matcher_->Next(), grammar_matcher_->Done()));  // Assume deterministic FST.
