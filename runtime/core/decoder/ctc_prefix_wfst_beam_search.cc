@@ -250,6 +250,10 @@ void CtcPrefixWfstBeamSearch::PruneAndUpdateHyps(const HypsMap& next_hyps) {
   }
 }
 
+inline StateId GetPrefixScoreGrammarFstStateOrFstStart(const PrefixScore& prefix_score, const fst::StdFst& fst) {
+  return prefix_score.grammar_fst_state != fst::kNoStateId ? prefix_score.grammar_fst_state : fst.Start();
+}
+
 void CtcPrefixWfstBeamSearch::FinalizeSearch() {
   // Do final processing: following epsilons, exiting dictation, endpointing words.
   ProcessFstUpdates(cur_hyps_, true);
@@ -260,7 +264,7 @@ void CtcPrefixWfstBeamSearch::FinalizeSearch() {
     const auto& prefix_state = hyp.first;
     const auto& prefix = std::get<0>(prefix_state);
     PrefixScore& prefix_score = hyp.second;
-    auto grammar_fst_state = prefix_score.grammar_fst_state != fst::kNoStateId ? prefix_score.grammar_fst_state : grammar_fst_->Start();
+    auto grammar_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(prefix_score, *grammar_fst_);
     auto final_weight = grammar_fst_->Final(grammar_fst_state);
     VLOG(1) << "FinalizeSearch: Adding final weight: " << IdsToString(prefix) << " state=" << grammar_fst_state << " final_weight=" << final_weight.Value();
     if (opts_.strict && final_weight == Weight::Zero()) {
@@ -340,7 +344,7 @@ void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps, bool final) 
 
 // Follow epsilon transitions on grammar, accumulating weights, calling handler function with each grammar state reached (including the initial state). Implements BFS. Does not call handler function on initial state.
 void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore& initial_prefix_score, float initial_weight, std::function<void(PrefixScore&, float)> handle_prefix_score) {
-  auto initial_fst_state = initial_prefix_score.grammar_fst_state != fst::kNoStateId ? initial_prefix_score.grammar_fst_state : matcher.GetFst().Start();
+  auto initial_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(initial_prefix_score, matcher.GetFst());
   std::list<std::pair<int, float>> state_queue({std::make_pair(initial_fst_state, initial_weight)});
   std::unordered_set<int> queued_states(initial_fst_state);
   while (!state_queue.empty()) {
@@ -414,7 +418,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     VLOG(2) << "ComputeFstScores: check_complete_word: " << word_table_->Find(word_id);
 
     CHECK_NE(word_id, fst::kNoLabel);
-    auto grammar_fst_state = current_prefix_score.grammar_fst_state != fst::kNoStateId ? current_prefix_score.grammar_fst_state : grammar_fst_->Start();
+    auto grammar_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(current_prefix_score, *grammar_fst_);
     grammar_matcher_->SetState(grammar_fst_state);
 
     auto follow_arc = [&add_new_next_prefix_score](PrefixScore& new_next_prefix_score, const fst::StdArc& arc) {
@@ -465,7 +469,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
 
   // Handle epsilon transitions at beginning of this-time-step processing, rather than at the end of the previous time step.
   if (true) {
-    auto grammar_fst_state = current_prefix_score.grammar_fst_state != fst::kNoStateId ? current_prefix_score.grammar_fst_state : grammar_fst_->Start();
+    auto grammar_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(current_prefix_score, *grammar_fst_);
     grammar_matcher_->SetState(grammar_fst_state);
     // Check if we have any epsilon transitions.
     if (grammar_matcher_->Find(0)) {
@@ -481,7 +485,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
 
   // Handle free dictation, outside the grammar.
   if (!current_prefix_score.is_in_grammar) {
-    auto grammar_fst_state = next_prefix_score.grammar_fst_state != fst::kNoStateId ? next_prefix_score.grammar_fst_state : grammar_fst_->Start();
+    auto grammar_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(next_prefix_score, *grammar_fst_);
     grammar_matcher_->SetState(grammar_fst_state);
     CHECK(dictation_end_label_ != fst::kNoLabel && grammar_matcher_->Find(dictation_end_label_));  // We must have at least one way to end the dictation, and possibly multiple.
     auto weight = grammar_matcher_->Value().weight.Value();
