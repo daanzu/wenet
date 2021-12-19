@@ -338,7 +338,7 @@ void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps, bool final) 
   next_hyps.swap(new_next_hyps);
 }
 
-// Follow epsilon transitions on grammar, accumulating weights, calling handler function with each grammar state reached (including the initial state).
+// Follow epsilon transitions on grammar, accumulating weights, calling handler function with each grammar state reached (including the initial state). Implements BFS. Does not call handler function on initial state.
 void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore& initial_prefix_score, float initial_weight, std::function<void(PrefixScore&, float)> handle_prefix_score) {
   auto initial_fst_state = initial_prefix_score.grammar_fst_state != fst::kNoStateId ? initial_prefix_score.grammar_fst_state : matcher.GetFst().Start();
   std::list<std::pair<int, float>> state_queue({std::make_pair(initial_fst_state, initial_weight)});
@@ -347,13 +347,13 @@ void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore
     int fst_state = state_queue.front().first;
     float weight = state_queue.front().second;
     state_queue.pop_front();
-    PrefixScore new_prefix_score = initial_prefix_score;
-    new_prefix_score.grammar_fst_state = fst_state;
-    handle_prefix_score(new_prefix_score, weight);
     matcher.SetState(fst_state);
     for (matcher.Find(0); !matcher.Done(); matcher.Next()) {
       const auto& arc = matcher.Value();
       if (queued_states.count(arc.nextstate)) continue;
+      PrefixScore new_prefix_score = initial_prefix_score;
+      new_prefix_score.grammar_fst_state = arc.nextstate;
+      handle_prefix_score(new_prefix_score, weight + arc.weight.Value());
       state_queue.emplace_back(arc.nextstate, weight + arc.weight.Value());
     }
   }
@@ -475,9 +475,8 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
           ComputeFstScores(current_prefix, new_current_prefix_score, id, next_prefix_score, final, add_new_next_prefix_score);
         }
       );
-      return;
     }
-    // Fall through and continue.
+    // Fall through and continue, to handle this state.
   }
 
   // Handle free dictation, outside the grammar.
@@ -507,7 +506,31 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
   }
 
   // Handle either: partial word prefixes, or only complete words.
-  if (opts_.process_partial_word_prefixes) {
+  if (!opts_.process_partial_word_prefixes) {
+    if (current_prefix.empty() || !(final || IdIsStartOfWord(id))) {
+      VLOG(3) << "    return: prefix empty or not start of word";
+      return add_new_next_prefix_score(next_prefix_score, FullLikelihood);
+    }
+
+    // Build the previously-completed word.
+    auto start_of_word_revit = std::find_if(current_prefix.rbegin(), current_prefix.rend(), [this](int id) { return IdIsStartOfWord(id); });
+    auto start_of_word = start_of_word_revit == current_prefix.rend() ? current_prefix.begin() : start_of_word_revit.base() - 1;
+    std::vector<std::string> word_pieces;
+    std::transform(start_of_word, current_prefix.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
+    auto word = JoinString("", word_pieces);
+    if (WordIsStartOfWord(word)) {
+      word = word.substr(3);
+    }
+    auto word_id = word_table_->Find(word);
+    if (word_id == fst::SymbolTable::kNoSymbol) {
+      VLOG(3) << "    return: not in word_table_";
+      return add_new_next_prefix_score(next_prefix_score, NoLikelihood);
+    }
+
+    check_complete_word(next_prefix_score, word_id, add_new_next_prefix_score);
+    return;
+
+  } else {  // (opts_.process_partial_word_prefixes)
     float final_weight = FullLikelihood;
     auto dictionary_fst_state = current_prefix_score.dictionary_fst_state != fst::kNoStateId ? current_prefix_score.dictionary_fst_state : dictionary_trie_fst_->Start();
     auto prefix_word_id = current_prefix_score.prefix_word_id;
@@ -567,30 +590,6 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     // But adding more units after this one may not be a word, so we must wait for a space character before officially moving forward???
     CHECK_EQ(dictionary_trie_fst_->NumArcs(nextstate), 0);  // We shouldn't be able to continue after a final state???
     return add_new_next_prefix_score(next_prefix_score, final_weight + FullLikelihood);
-
-  } else {  // (!opts_.process_partial_word_prefixes)
-    if (current_prefix.empty() || !(final || IdIsStartOfWord(id))) {
-      VLOG(3) << "    return: prefix empty or not start of word";
-      return add_new_next_prefix_score(next_prefix_score, FullLikelihood);
-    }
-
-    // Build the previously-completed word.
-    auto start_of_word_revit = std::find_if(current_prefix.rbegin(), current_prefix.rend(), [this](int id) { return IdIsStartOfWord(id); });
-    auto start_of_word = start_of_word_revit == current_prefix.rend() ? current_prefix.begin() : start_of_word_revit.base() - 1;
-    std::vector<std::string> word_pieces;
-    std::transform(start_of_word, current_prefix.end(), std::back_inserter(word_pieces), [this](int id) { return unit_table_->Find(id); });
-    auto word = JoinString("", word_pieces);
-    if (WordIsStartOfWord(word)) {
-      word = word.substr(3);
-    }
-    auto word_id = word_table_->Find(word);
-    if (word_id == fst::SymbolTable::kNoSymbol) {
-      VLOG(3) << "    return: not in word_table_";
-      return add_new_next_prefix_score(next_prefix_score, NoLikelihood);
-    }
-
-    check_complete_word(next_prefix_score, word_id, add_new_next_prefix_score);
-    return;
   }
 
   LOG(FATAL) << "We should never reach here.";
