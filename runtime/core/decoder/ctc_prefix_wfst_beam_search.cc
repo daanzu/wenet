@@ -359,6 +359,7 @@ void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore
       new_prefix_score.grammar_fst_state = arc.nextstate;
       handle_prefix_score(new_prefix_score, weight + arc.weight.Value());
       state_queue.emplace_back(arc.nextstate, weight + arc.weight.Value());
+      queued_states.insert(arc.nextstate);
     }
   }
 }
