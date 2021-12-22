@@ -285,7 +285,7 @@ void AddCombineToHypsMap(HypsMap& hyps, const PrefixState& prefix_state, const P
   if (!inserted) {
     const auto& old_prefix_state = it->first;
     auto& old_prefix_score = it->second;
-    VLOG(2) << "    combine:  s = " << old_prefix_score.s << " + " << prefix_score.s << "  ns = " << old_prefix_score.ns << " + " << prefix_score.ns;
+    VLOG(2) << "    combine state (" << WfstPrefixStateHash::prefix_state_string(prefix_state) << "):  s = " << old_prefix_score.s << " + " << prefix_score.s << "  ns = " << old_prefix_score.ns << " + " << prefix_score.ns;
     // old_prefix_score.s = LogAdd(old_prefix_score.s, prefix_score.s);
     // old_prefix_score.ns = LogAdd(old_prefix_score.ns, prefix_score.ns);
     old_prefix_score.s = std::max(old_prefix_score.s, prefix_score.s);
@@ -308,11 +308,11 @@ void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps, bool final) 
     CHECK(next_score.grammar_fst_state == std::get<1>(prefix_state) && next_score.dictionary_fst_state == std::get<2>(prefix_state) && next_score.prefix_word_id == std::get<3>(prefix_state));
     // If this hypothesis has no delayed update, we just copy it over to new_next_hyps unmodified.
     if (!next_score.delayed_fst_update && !final) {
-      VLOG(2) << "ProcessFstUpdates(0): " << IdsToString(new_prefix, -1, 50) << " " << next_score.grammar_fst_state << " " << next_score.dictionary_fst_state << " " << next_score.prefix_word_id << " = " << next_score.score();
+      VLOG(2) << "ProcessFstUpdates(0) hyp: " << IdsToString(new_prefix, -1, 50) << " " << next_score.grammar_fst_state << " " << next_score.dictionary_fst_state << " " << next_score.prefix_word_id << " = " << next_score.score();
       AddCombineToHypsMap(new_next_hyps, prefix_state, next_score);
       continue;
     }
-    VLOG(2) << "ProcessFstUpdates(1): " << IdsToString(new_prefix, -1, 50) << " " << next_score.grammar_fst_state << " " << next_score.dictionary_fst_state << " " << next_score.prefix_word_id << " = " << next_score.score();
+    VLOG(2) << "ProcessFstUpdates(1) hyp: " << IdsToString(new_prefix, -1, 50) << " " << next_score.grammar_fst_state << " " << next_score.dictionary_fst_state << " " << next_score.prefix_word_id << " = " << next_score.score();
 
     const auto& token = !final ? next_score.delayed_fst_update_token : std::make_tuple(&new_prefix, &next_score, opts_.blank);
     const auto& current_prefix = *std::get<0>(token);
@@ -346,18 +346,24 @@ void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps, bool final) 
 void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore& initial_prefix_score, float initial_weight, std::function<void(PrefixScore&, float)> handle_prefix_score) {
   auto initial_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(initial_prefix_score, matcher.GetFst());
   std::list<std::pair<int, float>> state_queue({std::make_pair(initial_fst_state, initial_weight)});
-  std::unordered_set<int> queued_states(initial_fst_state);
+  std::unordered_set<int> queued_states({initial_fst_state});
   while (!state_queue.empty()) {
-    int fst_state = state_queue.front().first;
-    float weight = state_queue.front().second;
+    const auto fst_state = state_queue.front().first;
+    const auto weight = state_queue.front().second;
     state_queue.pop_front();
+
+    if (fst_state != initial_fst_state) {
+      // Skip initial state.
+      PrefixScore new_prefix_score = initial_prefix_score;
+      new_prefix_score.grammar_fst_state = fst_state;
+      // VLOG(2) << "FollowEpsilons: handle_prefix_score: " << initial_fst_state << " -> " << new_prefix_score.grammar_fst_state;
+      handle_prefix_score(new_prefix_score, weight);
+    }
+
     matcher.SetState(fst_state);
     for (matcher.Find(0); !matcher.Done(); matcher.Next()) {
       const auto& arc = matcher.Value();
       if (queued_states.count(arc.nextstate)) continue;
-      PrefixScore new_prefix_score = initial_prefix_score;
-      new_prefix_score.grammar_fst_state = arc.nextstate;
-      handle_prefix_score(new_prefix_score, weight + arc.weight.Value());
       state_queue.emplace_back(arc.nextstate, weight + arc.weight.Value());
       queued_states.insert(arc.nextstate);
     }
@@ -405,8 +411,8 @@ bool FindFinalState(CtcPrefixWfstBeamSearch::Matcher& matcher, typename Arc::Sta
   return false;
 }
 
-// Computes the negative log likelihood (-infinity..0) of the given prefix + id in the FST, for the given next_prefix_score (containing the scores to use/pass on), and adds the resulting new next_prefix_score (single or multiple) with updated FST states (and inherited scores) using the given function.
 void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, bool final, std::function<void(PrefixScore&, float)> add_new_next_prefix_score) {
+// Computes the negative log likelihood (-infinity..0) of the given prefix + id in the FST, for the given next_prefix_score (containing the scores to use/pass on), and adds the resulting new next_prefix_score (single or multiple) with updated FST states (and inherited scores) using the given handler function.
   // Note: We are never called with the blank unit id, unless we doing final processing.
   CHECK((id != opts_.blank && id >= 0) != final);  // XOR
 
@@ -463,6 +469,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
   if (false && all_words == target_string_.substr(0, all_words.size()) && all_words.size() >= 47) {
     VLOG(2) << "ComputeFstScores: target: " << all_words;
   }
+  // dbg(all_words + "  " + std::to_string(current_prefix_score.grammar_fst_state));
 
   // Handle initialization.
   // if (current_prefix.empty()) {

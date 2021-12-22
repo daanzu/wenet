@@ -107,6 +107,14 @@ struct WfstPrefixStateHash {
     return std::make_tuple(prefix, score.grammar_fst_state, score.dictionary_fst_state, score.prefix_word_id);
   }
 
+  static std::string prefix_state_string(const WfstPrefixState& prefix_state) {
+    auto prefix = std::get<0>(prefix_state);
+    std::stringstream result;
+    std::copy(prefix.begin(), prefix.end(), std::ostream_iterator<int>(result, " "));
+    auto prefix_str = "[" + result.str().substr(0, result.str().size() - 1) + "]";
+    return prefix_str + " " + std::to_string(std::get<1>(prefix_state)) + " " + std::to_string(std::get<2>(prefix_state)) + " " + std::to_string(std::get<3>(prefix_state));
+  }
+
   size_t operator()(const WfstPrefixState& prefix_state) const {
     static auto wfst_prefix_hash = WfstPrefixHash();
     const auto& prefix = std::get<0>(prefix_state);
