@@ -26,7 +26,7 @@ struct CtcPrefixWfstBeamSearchOptions {
   int first_beam_size = 10;
   int second_beam_size = 10;
   string dictation_lexiconfree_label = "#NONTERM:DICTATION_LEXICONFREE";
-  string dictation_end_label = "#NONTERM:END";
+  string nonterm_end_label = "#NONTERM:END";
   bool strict = true;
   bool process_partial_word_prefixes = false;
   bool prune_directly_impossible_prefixes = true;
@@ -186,7 +186,7 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
 
   const std::string space_symbol_ = kSpaceSymbol;
   const fst::StdArc::Label dictation_lexiconfree_label_ = fst::kNoLabel;
-  const fst::StdArc::Label dictation_end_label_ = fst::kNoLabel;
+  const fst::StdArc::Label nonterm_end_label_ = fst::kNoLabel;
 
   void PruneAndUpdateHyps(const HypsMap& next_hyps);
   void ProcessFstUpdates(HypsMap& next_hyps, bool final);

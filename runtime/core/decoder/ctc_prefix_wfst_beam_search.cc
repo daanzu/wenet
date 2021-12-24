@@ -44,7 +44,7 @@ CtcPrefixWfstBeamSearch::CtcPrefixWfstBeamSearch(
       word_table_(word_table),
       unit_table_(unit_table),
       dictation_lexiconfree_label_(word_table->Find(opts_.dictation_lexiconfree_label)),
-      dictation_end_label_(word_table->Find(opts_.dictation_end_label)) {
+      nonterm_end_label_(word_table->Find(opts_.nonterm_end_label)) {
   if (opts_.process_partial_word_prefixes) {
     BuildUnitDictionaryTrie();
   }
@@ -261,14 +261,14 @@ void CtcPrefixWfstBeamSearch::FinalizeSearch() {
   ProcessFstUpdates(cur_hyps_, true);
 
   // Add in the grammar final weights, removing any hypotheses that are not final.
-  for (auto it = cur_hyps_.begin(); it != cur_hyps_.end(); /* see below */) {
+  for (auto it = cur_hyps_.begin(); it != cur_hyps_.end(); /* see ++it below */) {
     auto& hyp = *it;
     const auto& prefix_state = hyp.first;
     const auto& prefix = std::get<0>(prefix_state);
     PrefixScore& prefix_score = hyp.second;
     auto grammar_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(prefix_score, *grammar_fst_);
     auto final_weight = grammar_fst_->Final(grammar_fst_state);
-    VLOG(1) << "FinalizeSearch: Adding final weight: " << IdsToString(prefix) << " state=" << grammar_fst_state << " final_weight=" << final_weight.Value();
+    VLOG(2) << "FinalizeSearch: " << IdsToString(prefix) << " state=" << grammar_fst_state << " score=" << prefix_score.score() << " final_weight=" << final_weight.Value();
     if (opts_.strict && final_weight == Weight::Zero()) {
       it = cur_hyps_.erase(it);
       continue;
@@ -507,7 +507,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
   if (!current_prefix_score.is_in_grammar) {
     auto grammar_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(next_prefix_score, *grammar_fst_);
     grammar_matcher_->SetState(grammar_fst_state);
-    CHECK(dictation_end_label_ != fst::kNoLabel && grammar_matcher_->Find(dictation_end_label_));  // We must have at least one way to end the dictation, and possibly multiple.
+    CHECK(nonterm_end_label_ != fst::kNoLabel && grammar_matcher_->Find(nonterm_end_label_));  // We must have at least one way to end the dictation, and possibly multiple.
     auto weight = grammar_matcher_->Value().weight.Value();
     auto nextstate = grammar_matcher_->Value().nextstate;
     CHECK((grammar_matcher_->Next(), grammar_matcher_->Done()));  // Assume deterministic FST.
