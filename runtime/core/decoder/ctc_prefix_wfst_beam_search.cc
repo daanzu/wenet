@@ -329,8 +329,8 @@ void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps, bool final) 
 
     auto orig_next_score = next_score;
     ComputeFstScores(current_prefix, current_prefix_score, id, next_score, final,
-      [this, &new_next_hyps, &new_prefix, &current_prefix, &orig_next_score, id](PrefixScore& new_next_score, float fst_score) {
-        // Warning: this takes new_next_score by reference for efficiency, and its modifications are not intended to be used outside of this function.
+      [this, &new_next_hyps, &new_prefix, &current_prefix, &orig_next_score, id](PrefixScore new_next_score, float fst_score) {
+        // TODO: should we take new_next_score by reference for efficiency, and its modifications are not intended to be used outside of this function?
         // TODO: Is it more efficient to just take as parameters the new next state, and use a new constructor which takes the new state along with the fst_score to add?
         CHECK_LE(fst_score, 0);
         if (opts_.strict && fst_score <= NoLikelihood) return;  // If in strict mode, drop any scores with no likelihood in the grammar.
