@@ -416,10 +416,11 @@ bool FindFinalState(CtcPrefixWfstBeamSearch::Matcher& matcher, typename Arc::Sta
   return false;
 }
 
-void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, bool final, std::function<void(PrefixScore&, float)> add_new_next_prefix_score) {
 // Computes the negative log likelihood (-infinity..0) of the given prefix + id in the FST, for the given next_prefix_score (containing the scores to use/pass on), and adds the resulting new next_prefix_score (single or multiple) with updated FST states (and inherited scores) using the given handler function.
-  // Note: We are never called with the blank unit id or an id<0, unless we doing final processing.
-  CHECK((id != opts_.blank && id >= 0) != final);  // XOR
+void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, bool final, std::function<void(PrefixScore&, float)> add_new_next_prefix_score) {
+  CHECK_GE(id, 0);
+  // We are never called with the blank unit id or an id<0, unless we doing final processing. For final processing, we are called with the blank unit id, to indicate that we should consider any in-progress words to now be complete.
+  CHECK((id != opts_.blank) != final);  // XOR
 
   if (final) {
     // If final, we follow any epsilon transitions, after normal processing.
@@ -513,7 +514,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     CHECK((grammar_matcher_->Next(), grammar_matcher_->Done()));  // Assume deterministic FST.
     CHECK_EQ(weight, 0);  // We don't support weights on the dictation-end arc.
 
-    // Recurse, assuming we ended the dictation immediately before receiving this word.
+    // Recurse, assuming we ended the dictation immediately before receiving this word, i.e. we followed the nonterm_end_label_ arc.
     auto new_current_prefix_score = current_prefix_score;
     new_current_prefix_score.grammar_fst_state = nextstate;
     new_current_prefix_score.is_in_grammar = true;
@@ -523,9 +524,11 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     ComputeFstScores(current_prefix, new_current_prefix_score, id, new_next_prefix_score, final, add_new_next_prefix_score);
 
     // Finally, just absorb the new word, without ending the dictation. But we can't end the utterance (final) while in dictation without ending it first.
-    if (!final) {
-      add_new_next_prefix_score(next_prefix_score, -opts_.dictation_wordpiece_insertion_penalty);
+    if (final) {
+      next_prefix_score.grammar_fst_state = nextstate;
+      next_prefix_score.is_in_grammar = true;
     }
+    add_new_next_prefix_score(next_prefix_score, -opts_.dictation_wordpiece_insertion_penalty);
     return;
   }
 

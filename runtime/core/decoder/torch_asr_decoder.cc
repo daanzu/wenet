@@ -221,7 +221,7 @@ void TorchAsrDecoder::UpdateResult(bool finish) {
     // various FST operations when building the decoding graph. So here we use
     // time stamp of the input(e2e model unit), which is more accurate, and it
     // requires the symbol table of the e2e model used in training.
-    if (unit_table_ != nullptr && finish) {
+    if (unit_table_ != nullptr && finish && searcher_->Type() != kPrefixWfstBeamSearch) {
       const std::vector<int>& input = inputs[i];
       const std::vector<int>& time_stamp = times[i];
       CHECK_EQ(input.size(), time_stamp.size());
