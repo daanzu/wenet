@@ -343,7 +343,7 @@ void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps, bool final) 
 }
 
 // Follow epsilon transitions on grammar, accumulating weights, calling handler function with each grammar state reached (including the initial state). Implements BFS. Does not call handler function on initial state.
-void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore& initial_prefix_score, float initial_weight, std::function<void(PrefixScore&, float)> handle_prefix_score) {
+void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore& initial_prefix_score, float initial_weight, bool handle_initial, std::function<void(PrefixScore&, float)> handle_prefix_score) {
   auto initial_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(initial_prefix_score, matcher.GetFst());
   std::list<std::pair<int, float>> state_queue({std::make_pair(initial_fst_state, initial_weight)});
   std::unordered_set<int> queued_states({initial_fst_state});
@@ -352,7 +352,7 @@ void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore
     const auto weight = state_queue.front().second;
     state_queue.pop_front();
 
-    if (fst_state != initial_fst_state) {
+    if (handle_initial || fst_state != initial_fst_state) {
       // Skip initial state.
       PrefixScore new_prefix_score = initial_prefix_score;
       new_prefix_score.grammar_fst_state = fst_state;
@@ -415,6 +415,13 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
 // Computes the negative log likelihood (-infinity..0) of the given prefix + id in the FST, for the given next_prefix_score (containing the scores to use/pass on), and adds the resulting new next_prefix_score (single or multiple) with updated FST states (and inherited scores) using the given handler function.
   // Note: We are never called with the blank unit id, unless we doing final processing.
   CHECK((id != opts_.blank && id >= 0) != final);  // XOR
+
+  if (final) {
+    // If final, we follow any epsilon transitions, after normal processing.
+    add_new_next_prefix_score = [this, add_new_next_prefix_score](PrefixScore& new_next_prefix_score, float weight) {
+      FollowEpsilons(*grammar_matcher_, new_next_prefix_score, weight, true, add_new_next_prefix_score);
+    };
+  }
 
   // Check whether the completed word fits in the grammar FST, and if so, passes updated prefix_score (following the matching single arc or multiple arcs) (along with the negative log likelihood) to given handler. Only needs to handle grammar_fst, because it only considers complete words. Also handles transitioning to dictation.
   auto check_complete_word = [this, &current_prefix_score](const PrefixScore& next_prefix_score, int word_id, std::function<void(PrefixScore&, float)> add_new_next_prefix_score) {
@@ -482,7 +489,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     // Check if we have any epsilon transitions.
     if (grammar_matcher_->Find(0)) {
       // Recurse, following epsilon transitions.
-      FollowEpsilons(*grammar_matcher_, current_prefix_score, 0, 
+      FollowEpsilons(*grammar_matcher_, current_prefix_score, 0, false,
         [&](PrefixScore& new_current_prefix_score, float weight) {
           ComputeFstScores(current_prefix, new_current_prefix_score, id, next_prefix_score, final, add_new_next_prefix_score);
         }
