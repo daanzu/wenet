@@ -358,7 +358,6 @@ void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore
     state_queue.pop_front();
 
     if (handle_initial || fst_state != initial_fst_state) {
-      // Skip initial state.
       PrefixScore new_prefix_score = initial_prefix_score;
       new_prefix_score.grammar_fst_state = fst_state;
       // VLOG(2) << "FollowEpsilons: handle_prefix_score: " << initial_fst_state << " -> " << new_prefix_score.grammar_fst_state;
@@ -366,6 +365,7 @@ void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore
     }
 
     matcher.SetState(fst_state);
+    // Note: we must complete this entire loop before calling the handler, because the handler may call matcher.SetState(), which would disrupt our loop iterator.
     for (matcher.Find(0); !matcher.Done(); matcher.Next()) {
       const auto& arc = matcher.Value();
       if (queued_states.count(arc.nextstate)) continue;
@@ -416,7 +416,7 @@ bool FindFinalState(CtcPrefixWfstBeamSearch::Matcher& matcher, typename Arc::Sta
   return false;
 }
 
-// Computes the negative log likelihood (-infinity..0) of the given prefix + id in the FST, for the given next_prefix_score (containing the scores to use/pass on), and adds the resulting new next_prefix_score (single or multiple) with updated FST states (and inherited scores) using the given handler function.
+// Computes the negative log likelihood (-infinity..0) of the given prefix + id in the FST, for the given next_prefix_score (containing the scores to use/pass on), and adds the resulting new next_prefix_score (single or multiple) with updated FST states (and inherited scores) using the given handler function. Note: prior to this function being called, next_prefix_score should have the same FST state as current_prefix_score (but probably different scores), but the FST state (along with the scores) may/should be modified by this function, based on it processing the incoming id and possibly traversing the grammar FST.
 void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, bool final, std::function<void(PrefixScore&, float)> add_new_next_prefix_score) {
   CHECK_GE(id, 0);
   // We are never called with the blank unit id or an id<0, unless we doing final processing. For final processing, we are called with the blank unit id, to indicate that we should consider any in-progress words to now be complete.

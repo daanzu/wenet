@@ -138,6 +138,7 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   using HypsMap = std::unordered_map<PrefixState, PrefixScore, PrefixStateHash>;
   using Matcher = fst::ExplicitMatcher<fst::SortedMatcher<fst::Fst<fst::StdArc>>>;
 
+  // Switch to a new grammar FST.
   void ResetFst(std::shared_ptr<fst::StdFst> fst);
 
   void Search(const torch::Tensor& logp) override;
