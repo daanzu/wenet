@@ -57,16 +57,26 @@ struct WfstPrefixScore {
   bool is_in_grammar = true;  // This should be entirely dependent on grammar_fst_state, and not path-dependent.
   fst::StdArc::StateId dictionary_fst_state = fst::kNoStateId;
   fst::StdArc::Label prefix_word_id = fst::kNoLabel;  // This may be entirely dependent on dictionary_fst_state, and not path-dependent, but I am not completely sure.
+  std::vector<fst::StdArc::Label> grammar_ilabels;  // This is essentially a transformed version of the prefix, mapping from the unit_table to the word_table.
+  std::vector<fst::StdArc::Label> grammar_olabels;  // This is similar to the ilabels, but includes nonterminals from the olabels.
 
   bool StatesEqual(const WfstPrefixScore& other) const {
     return grammar_fst_state == other.grammar_fst_state
       && is_in_grammar == other.is_in_grammar
       && dictionary_fst_state == other.dictionary_fst_state
-      && prefix_word_id == other.prefix_word_id;
+      && prefix_word_id == other.prefix_word_id
+      && grammar_ilabels == other.grammar_ilabels
+      && grammar_olabels == other.grammar_olabels;
   }
 
   std::string StateString() const {
     return std::to_string(grammar_fst_state) + " " + std::to_string(is_in_grammar) + " " + std::to_string(dictionary_fst_state) + " " + std::to_string(prefix_word_id);
+  }
+
+  void FollowGrammarArc(const fst::StdArc& arc) {
+    grammar_fst_state = arc.nextstate;
+    grammar_ilabels.push_back(arc.ilabel);
+    grammar_olabels.push_back(arc.olabel);
   }
 
   std::vector<std::string> updates;
@@ -146,20 +156,11 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   void FinalizeSearch() override;
   SearchType Type() const override { return SearchType::kPrefixWfstBeamSearch; }
 
-  const std::vector<std::vector<int>>& hypotheses() const {
-    return hypotheses_;
-  }
-  const std::vector<float>& likelihood() const { return likelihood_; }
-  const std::vector<float>& viterbi_likelihood() const {
-    return viterbi_likelihood_;
-  }
-  const std::vector<std::vector<int>>& times() const { return times_; }
-  // For CTC prefix beam search, both inputs and outputs are hypotheses_
   const std::vector<std::vector<int>>& Inputs() const override {
     return hypotheses_;
   }
   const std::vector<std::vector<int>>& Outputs() const override {
-    return hypotheses_;
+    return hypotheses_grammar_olabels_;
   }
   const std::vector<float>& Likelihood() const override { return likelihood_; }
   const std::vector<std::vector<int>>& Times() const override { return times_; }
@@ -169,6 +170,7 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
 
   // N-best list and corresponding likelihood_, in sorted order
   std::vector<std::vector<int>> hypotheses_;
+  std::vector<std::vector<int>> hypotheses_grammar_olabels_;
   std::vector<float> likelihood_;
   std::vector<float> viterbi_likelihood_;
   std::vector<std::vector<int>> times_;

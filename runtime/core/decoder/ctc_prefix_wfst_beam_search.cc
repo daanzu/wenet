@@ -53,6 +53,7 @@ CtcPrefixWfstBeamSearch::CtcPrefixWfstBeamSearch(
 
 void CtcPrefixWfstBeamSearch::Reset() {
   hypotheses_.clear();
+  hypotheses_grammar_olabels_.clear();
   likelihood_.clear();
   cur_hyps_.clear();
   viterbi_likelihood_.clear();
@@ -230,24 +231,27 @@ void CtcPrefixWfstBeamSearch::PruneAndUpdateHyps(const HypsMap& next_hyps) {
 
   cur_hyps_.clear();
   hypotheses_.clear();
+  hypotheses_grammar_olabels_.clear();
   likelihood_.clear();
   viterbi_likelihood_.clear();
   times_.clear();
-  for (auto& item : arr) {
+  for (const auto& item : arr) {
     const auto& prefix = std::get<0>(item.first);
+    const auto& prefix_score = item.second;
     VLOG(1) << "end t" << abs_time_step_ << ": "
-            << IdsToString(prefix, -1, 60) << " = " << item.second.score()
-            << "    state=(" << item.second.StateString() << ")"
-            // << "    grammar_fst_state=" << item.second.grammar_fst_state
-            // << "    dict_fst_state=" << item.second.dictionary_fst_state
-            // << "    updates=" << item.second.updates.size()
-            // << "    updates=" << JoinString(" | ", item.second.updates)
+            << IdsToString(prefix, -1, 60) << " = " << prefix_score.score()
+            << "    state=(" << prefix_score.StateString() << ")"
+            // << "    grammar_fst_state=" << prefix_score.grammar_fst_state
+            // << "    dict_fst_state=" << prefix_score.dictionary_fst_state
+            // << "    updates=" << prefix_score.updates.size()
+            // << "    updates=" << JoinString(" | ", prefix_score.updates)
             ;
-    cur_hyps_.emplace(item.first, item.second);
+    cur_hyps_.emplace(item.first, prefix_score);
     hypotheses_.emplace_back(prefix);
-    likelihood_.emplace_back(item.second.score());
-    viterbi_likelihood_.emplace_back(item.second.viterbi_score());
-    times_.emplace_back(item.second.times());
+    hypotheses_grammar_olabels_.emplace_back(prefix_score.grammar_olabels);
+    likelihood_.emplace_back(prefix_score.score());
+    viterbi_likelihood_.emplace_back(prefix_score.viterbi_score());
+    times_.emplace_back(prefix_score.times());
   }
 }
 
@@ -350,26 +354,26 @@ void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps, bool final) 
 // Follow epsilon transitions on grammar, accumulating weights, calling handler function with each grammar state reached (including the initial state). Implements BFS. Does not call handler function on initial state.
 void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore& initial_prefix_score, float initial_weight, bool handle_initial, std::function<void(PrefixScore&, float)> handle_prefix_score) {
   auto initial_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(initial_prefix_score, matcher.GetFst());
-  std::list<std::pair<int, float>> state_queue({std::make_pair(initial_fst_state, initial_weight)});
+  std::list<fst::StdArc> state_queue({fst::StdArc(fst::kNoLabel, fst::kNoLabel, initial_weight, initial_fst_state)});
   std::unordered_set<int> queued_states({initial_fst_state});
   while (!state_queue.empty()) {
-    const auto fst_state = state_queue.front().first;
-    const auto weight = state_queue.front().second;
-    state_queue.pop_front();
+    const auto fst_state = state_queue.front().nextstate;
+    const auto weight = state_queue.front().weight;
 
     if (handle_initial || fst_state != initial_fst_state) {
       PrefixScore new_prefix_score = initial_prefix_score;
-      new_prefix_score.grammar_fst_state = fst_state;
+      new_prefix_score.FollowGrammarArc(state_queue.front());
       // VLOG(2) << "FollowEpsilons: handle_prefix_score: " << initial_fst_state << " -> " << new_prefix_score.grammar_fst_state;
-      handle_prefix_score(new_prefix_score, weight);
+      handle_prefix_score(new_prefix_score, weight.Value());
     }
 
+    state_queue.pop_front();
     matcher.SetState(fst_state);
     // Note: we must complete this entire loop before calling the handler, because the handler may call matcher.SetState(), which would disrupt our loop iterator.
     for (matcher.Find(0); !matcher.Done(); matcher.Next()) {
       const auto& arc = matcher.Value();
       if (queued_states.count(arc.nextstate)) continue;
-      state_queue.emplace_back(arc.nextstate, weight + arc.weight.Value());
+      state_queue.emplace_back(arc.ilabel, arc.olabel, fst::Times(weight, arc.weight), arc.nextstate);
       queued_states.insert(arc.nextstate);
     }
   }
@@ -442,10 +446,8 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     grammar_matcher_->SetState(grammar_fst_state);
 
     auto follow_arc = [&add_new_next_prefix_score](PrefixScore& new_next_prefix_score, const fst::StdArc& arc) {
-      auto weight = arc.weight.Value();
-      auto nextstate = arc.nextstate;
-      new_next_prefix_score.grammar_fst_state = nextstate;
-      add_new_next_prefix_score(new_next_prefix_score, -weight);
+      new_next_prefix_score.FollowGrammarArc(arc);
+      add_new_next_prefix_score(new_next_prefix_score, -arc.weight.Value());
     };
 
     if (dictation_lexiconfree_label_ != fst::kNoLabel && grammar_matcher_->Find(dictation_lexiconfree_label_)) {
@@ -509,23 +511,24 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     auto grammar_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(next_prefix_score, *grammar_fst_);
     grammar_matcher_->SetState(grammar_fst_state);
     CHECK(nonterm_end_label_ != fst::kNoLabel && grammar_matcher_->Find(nonterm_end_label_));  // We must have at least one way to end the dictation, and possibly multiple.
-    auto weight = grammar_matcher_->Value().weight.Value();
-    auto nextstate = grammar_matcher_->Value().nextstate;
+    auto arc = grammar_matcher_->Value();
+    auto weight = arc.weight.Value();
+    auto nextstate = arc.nextstate;
     CHECK((grammar_matcher_->Next(), grammar_matcher_->Done()));  // Assume deterministic FST.
     CHECK_EQ(weight, 0);  // We don't support weights on the dictation-end arc.
 
     // Recurse, assuming we ended the dictation immediately before receiving this word, i.e. we followed the nonterm_end_label_ arc.
     auto new_current_prefix_score = current_prefix_score;
-    new_current_prefix_score.grammar_fst_state = nextstate;
+    new_current_prefix_score.FollowGrammarArc(arc);
     new_current_prefix_score.is_in_grammar = true;
     auto new_next_prefix_score = next_prefix_score;
-    new_next_prefix_score.grammar_fst_state = nextstate;
+    new_next_prefix_score.FollowGrammarArc(arc);
     new_next_prefix_score.is_in_grammar = true;
     ComputeFstScores(current_prefix, new_current_prefix_score, id, new_next_prefix_score, final, add_new_next_prefix_score);
 
     // Finally, just absorb the new word, without ending the dictation. But we can't end the utterance (final) while in dictation without ending it first.
     if (final) {
-      next_prefix_score.grammar_fst_state = nextstate;
+      next_prefix_score.FollowGrammarArc(arc);
       next_prefix_score.is_in_grammar = true;
     }
     add_new_next_prefix_score(next_prefix_score, -opts_.dictation_wordpiece_insertion_penalty);
