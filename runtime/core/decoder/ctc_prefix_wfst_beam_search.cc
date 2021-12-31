@@ -56,7 +56,7 @@ CtcPrefixWfstBeamSearch::CtcPrefixWfstBeamSearch(
 
 void CtcPrefixWfstBeamSearch::Reset() {
   hypotheses_.clear();
-  hypotheses_grammar_olabels_.clear();
+  hypotheses_with_nonterms_.clear();
   likelihood_.clear();
   cur_hyps_.clear();
   viterbi_likelihood_.clear();
@@ -235,7 +235,7 @@ void CtcPrefixWfstBeamSearch::PruneAndUpdateHyps(const HypsMap& next_hyps) {
 
   cur_hyps_.clear();
   hypotheses_.clear();
-  hypotheses_grammar_olabels_.clear();
+  hypotheses_with_nonterms_.clear();
   likelihood_.clear();
   viterbi_likelihood_.clear();
   times_.clear();
@@ -253,7 +253,7 @@ void CtcPrefixWfstBeamSearch::PruneAndUpdateHyps(const HypsMap& next_hyps) {
             ;
     cur_hyps_.emplace(item.first, prefix_score);
     hypotheses_.emplace_back(prefix);
-    hypotheses_grammar_olabels_.emplace_back(prefix_score.grammar_olabels);
+    hypotheses_with_nonterms_.emplace_back(prefix_score.prefix_with_nonterms);
     likelihood_.emplace_back(prefix_score.score());
     viterbi_likelihood_.emplace_back(prefix_score.viterbi_score());
     times_.emplace_back(prefix_score.times());
