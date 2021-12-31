@@ -27,6 +27,7 @@ struct CtcPrefixWfstBeamSearchOptions {
   int second_beam_size = 10;
   string dictation_lexiconfree_label = "#NONTERM:DICTATION_LEXICONFREE";
   string nonterm_end_label = "#NONTERM:END";
+  string rule0_label = "#NONTERM:RULE0";
   bool strict = true;
   bool process_partial_word_prefixes = false;
   bool prune_directly_impossible_prefixes = true;
@@ -57,20 +58,58 @@ struct WfstPrefixScore {
   bool is_in_grammar = true;  // This should be entirely dependent on grammar_fst_state, and not path-dependent.
   fst::StdArc::StateId dictionary_fst_state = fst::kNoStateId;
   fst::StdArc::Label prefix_word_id = fst::kNoLabel;  // This may be entirely dependent on dictionary_fst_state, and not path-dependent, but I am not completely sure.
+  int rule_number = -1;
   std::vector<fst::StdArc::Label> grammar_ilabels;  // This is essentially a transformed version of the prefix, mapping from the unit_table to the word_table.
   std::vector<fst::StdArc::Label> grammar_olabels;  // This is similar to the ilabels, but includes nonterminals from the olabels.
+
+  static WfstPrefixScore InitFromFstStateOnly(const WfstPrefixScore& other) {
+    WfstPrefixScore ret;
+    ret.grammar_fst_state = other.grammar_fst_state;
+    ret.is_in_grammar = other.is_in_grammar;
+    ret.dictionary_fst_state = other.dictionary_fst_state;
+    ret.prefix_word_id = other.prefix_word_id;
+    ret.rule_number = other.rule_number;
+    ret.grammar_ilabels = other.grammar_ilabels;
+    ret.grammar_olabels = other.grammar_olabels;
+    return ret;
+  }
+
+  void CopyStateOnly(const WfstPrefixScore& other) {
+    grammar_fst_state = other.grammar_fst_state;
+    is_in_grammar = other.is_in_grammar;
+    dictionary_fst_state = other.dictionary_fst_state;
+    prefix_word_id = other.prefix_word_id;
+    rule_number = other.rule_number;
+    grammar_ilabels = other.grammar_ilabels;
+    grammar_olabels = other.grammar_olabels;
+  }
 
   bool StatesEqual(const WfstPrefixScore& other) const {
     return grammar_fst_state == other.grammar_fst_state
       && is_in_grammar == other.is_in_grammar
       && dictionary_fst_state == other.dictionary_fst_state
       && prefix_word_id == other.prefix_word_id
+      && rule_number == other.rule_number
       && grammar_ilabels == other.grammar_ilabels
       && grammar_olabels == other.grammar_olabels;
   }
 
-  std::string StateString() const {
-    return std::to_string(grammar_fst_state) + " " + std::to_string(is_in_grammar) + " " + std::to_string(dictionary_fst_state) + " " + std::to_string(prefix_word_id);
+  std::string StateString(bool verbose = false) const {
+    auto str = std::to_string(grammar_fst_state) + " " + std::to_string(is_in_grammar) + " " + std::to_string(dictionary_fst_state) + " " + std::to_string(prefix_word_id) + " " + std::to_string(rule_number);
+    if (verbose) {
+      str += " " + std::to_string(grammar_ilabels.size()) + "[";
+      for (auto i : grammar_ilabels) {
+        str += std::to_string(i) + " ";
+      }
+      str = str.back() == ' ' ? str.substr(0, str.size() - 1) : str;
+      str += "] " + std::to_string(grammar_olabels.size()) + "[";
+      for (auto i : grammar_olabels) {
+        str += std::to_string(i) + " ";
+      }
+      str = str.back() == ' ' ? str.substr(0, str.size() - 1) : str;
+      str += "]";
+    }
+    return str;
   }
 
   void FollowGrammarArc(const fst::StdArc& arc) {
@@ -85,13 +124,7 @@ struct WfstPrefixScore {
   }
 
   WfstPrefixScore() = default;
-  WfstPrefixScore(fst::StdArc::StateId grammar_fst_state, bool is_in_grammar, fst::StdArc::StateId dictionary_fst_state, fst::StdArc::Label prefix_word_id)
-    : grammar_fst_state(grammar_fst_state), is_in_grammar(is_in_grammar), dictionary_fst_state(dictionary_fst_state), prefix_word_id(prefix_word_id) {}
   
-  static WfstPrefixScore FromFstStateOnly(const WfstPrefixScore& other) {
-    return WfstPrefixScore(other.grammar_fst_state, other.is_in_grammar, other.dictionary_fst_state, other.prefix_word_id);
-  }
-
   float score() const { return LogAdd(s, ns); }
   float viterbi_score() const { return v_s > v_ns ? v_s : v_ns; }
   const std::vector<int>& times() const {
@@ -160,10 +193,11 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
     return hypotheses_;
   }
   const std::vector<std::vector<int>>& Outputs() const override {
-    return hypotheses_grammar_olabels_;
+    return hypotheses_;
   }
   const std::vector<float>& Likelihood() const override { return likelihood_; }
   const std::vector<std::vector<int>>& Times() const override { return times_; }
+  const std::vector<int>& RuleNumber() const { return rule_number_; }
 
  private:
   int abs_time_step_ = 0;
@@ -174,6 +208,7 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   std::vector<float> likelihood_;
   std::vector<float> viterbi_likelihood_;
   std::vector<std::vector<int>> times_;
+  std::vector<int> rule_number_;
 
   // Map from prefix to its score
   HypsMap cur_hyps_;
@@ -190,10 +225,12 @@ class CtcPrefixWfstBeamSearch : public SearchInterface {
   const std::string space_symbol_ = kSpaceSymbol;
   const fst::StdArc::Label dictation_lexiconfree_label_ = fst::kNoLabel;
   const fst::StdArc::Label nonterm_end_label_ = fst::kNoLabel;
+  const fst::StdArc::Label rule0_label_ = fst::kNoLabel;
 
   void PruneAndUpdateHyps(const HypsMap& next_hyps);
   void ProcessFstUpdates(HypsMap& next_hyps, bool final);
   void ComputeFstScores(const std::vector<int>& current_prefix, const PrefixScore& current_prefix_score, int id, PrefixScore next_prefix_score, bool final, std::function<void(PrefixScore&, float)> add_new_next_prefix_score);
+  void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore& initial_prefix_score, float initial_weight, bool handle_initial, std::function<void(PrefixScore&, float)> handle_prefix_score);
   bool WordIsStartOfWord(const std::string& word);
   bool IdIsStartOfWord(int id);
   std::string IdsToString(const std::vector<int> ids, int extra_id = -1, int max_len = -1);

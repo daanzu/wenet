@@ -66,6 +66,7 @@ struct DecodeResult {
   float score = -kFloatMax;
   std::string sentence;
   std::vector<WordPiece> word_pieces;
+  int rule_number = -1;
 
   static bool CompareFunc(const DecodeResult& a, const DecodeResult& b) {
     return a.score > b.score;

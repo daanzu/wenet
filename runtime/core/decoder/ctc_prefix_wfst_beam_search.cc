@@ -44,7 +44,10 @@ CtcPrefixWfstBeamSearch::CtcPrefixWfstBeamSearch(
       word_table_(word_table),
       unit_table_(unit_table),
       dictation_lexiconfree_label_(word_table->Find(opts_.dictation_lexiconfree_label)),
-      nonterm_end_label_(word_table->Find(opts_.nonterm_end_label)) {
+      nonterm_end_label_(word_table->Find(opts_.nonterm_end_label)),
+      rule0_label_(word_table->Find(opts_.rule0_label)) {
+  CHECK_NE(dictation_lexiconfree_label_, fst::kNoLabel);
+  CHECK_NE(nonterm_end_label_, fst::kNoLabel);
   if (opts_.process_partial_word_prefixes) {
     BuildUnitDictionaryTrie();
   }
@@ -58,6 +61,7 @@ void CtcPrefixWfstBeamSearch::Reset() {
   cur_hyps_.clear();
   viterbi_likelihood_.clear();
   times_.clear();
+  rule_number_.clear();
   abs_time_step_ = 0;
   PrefixScore prefix_score;
   prefix_score.s = 0.0;
@@ -90,7 +94,7 @@ PrefixScore& GetNextHyp(HypsMap& next_hyps, const std::vector<int>& prefix, cons
   if (it != next_hyps.end()) {
     return it->second;
   }
-  return next_hyps.emplace(key, PrefixScore::FromFstStateOnly(current_score)).first->second;
+  return next_hyps.emplace(key, PrefixScore::InitFromFstStateOnly(current_score)).first->second;
 }
 
 // Please refer https://robin1001.github.io/2020/12/11/ctc-search
@@ -154,7 +158,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
           // Case 0: *a + ε => *a
           // If we propose a blank, the prefix doesn't change. Only the probability of ending in blank gets updated, and the previous character could be either blank or nonblank. Progression of prefix_score: *a at time t-1 => *a at time t.
           PrefixScore& next_score = GetNextHyp(next_hyps, prefix, prefix_score);
-          next_score.UpdateStamp("case0(" + IdsToString(prefix) + "|" + unit_table_->Find(id) + ")@" + std::to_string(abs_time_step_), prefix);
+          // next_score.UpdateStamp("case0(" + IdsToString(prefix) + "|" + unit_table_->Find(id) + ")@" + std::to_string(abs_time_step_), prefix);
           next_score.s = LogAdd(next_score.s, prefix_score.score() + prob);
           next_score.v_s = prefix_score.viterbi_score() + prob;
           next_score.times_s = prefix_score.times();
@@ -163,7 +167,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
           // Case 1: *a + a => *a
           // If we propose a repeat nonblank, after a nonblank, the prefix doesn't change (the repeats are merged). Only the probability of ending in nonblank gets updated, and we know the previous character was nonblank. Progression of prefix_score: *a at time t-1 => *a at time t.
           PrefixScore& next_score1 = GetNextHyp(next_hyps, prefix, prefix_score);
-          next_score1.UpdateStamp("case1(" + IdsToString(prefix) + "|" + unit_table_->Find(id) + ")@" + std::to_string(abs_time_step_), prefix);
+          // next_score1.UpdateStamp("case1(" + IdsToString(prefix) + "|" + unit_table_->Find(id) + ")@" + std::to_string(abs_time_step_), prefix);
           next_score1.ns = LogAdd(next_score1.ns, prefix_score.ns + prob);
           if (next_score1.v_ns < prefix_score.v_ns + prob) {
             next_score1.v_ns = prefix_score.v_ns + prob;
@@ -180,7 +184,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
           std::vector<int> new_prefix(prefix);
           new_prefix.emplace_back(id);
           PrefixScore& next_score2 = GetNextHyp(next_hyps, new_prefix, prefix_score);
-          next_score2.UpdateStamp("case2(" + IdsToString(prefix) + "|" + unit_table_->Find(id) + ")@" + std::to_string(abs_time_step_), new_prefix);
+          // next_score2.UpdateStamp("case2(" + IdsToString(prefix) + "|" + unit_table_->Find(id) + ")@" + std::to_string(abs_time_step_), new_prefix);
           next_score2.SetDelayedFstUpdate(prefix, prefix_score, id);
           next_score2.ns = LogAdd(next_score2.ns, prefix_score.s + prob);
           if (next_score2.v_ns < prefix_score.v_s + prob) {
@@ -196,7 +200,7 @@ void CtcPrefixWfstBeamSearch::Search(const torch::Tensor& logp) {
           std::vector<int> new_prefix(prefix);
           new_prefix.emplace_back(id);
           PrefixScore& next_score = GetNextHyp(next_hyps, new_prefix, prefix_score);
-          next_score.UpdateStamp("case3(" + IdsToString(prefix) + "|" + unit_table_->Find(id) + ")@" + std::to_string(abs_time_step_), new_prefix);
+          // next_score.UpdateStamp("case3(" + IdsToString(prefix) + "|" + unit_table_->Find(id) + ")@" + std::to_string(abs_time_step_), new_prefix);
           next_score.SetDelayedFstUpdate(prefix, prefix_score, id);
           next_score.ns = LogAdd(next_score.ns, prefix_score.score() + prob);
           if (next_score.v_ns < prefix_score.viterbi_score() + prob) {
@@ -235,6 +239,7 @@ void CtcPrefixWfstBeamSearch::PruneAndUpdateHyps(const HypsMap& next_hyps) {
   likelihood_.clear();
   viterbi_likelihood_.clear();
   times_.clear();
+  rule_number_.clear();
   for (const auto& item : arr) {
     const auto& prefix = std::get<0>(item.first);
     const auto& prefix_score = item.second;
@@ -252,6 +257,7 @@ void CtcPrefixWfstBeamSearch::PruneAndUpdateHyps(const HypsMap& next_hyps) {
     likelihood_.emplace_back(prefix_score.score());
     viterbi_likelihood_.emplace_back(prefix_score.viterbi_score());
     times_.emplace_back(prefix_score.times());
+    rule_number_.emplace_back(prefix_score.rule_number);
   }
 }
 
@@ -351,18 +357,28 @@ void CtcPrefixWfstBeamSearch::ProcessFstUpdates(HypsMap& next_hyps, bool final) 
   VLOG(2) << "ProcessFstUpdates(" << (final ? "FINAL" : "") << "): done, left with " << next_hyps.size() << " hyps";
 }
 
-// Follow epsilon transitions on grammar, accumulating weights, calling handler function with each grammar state reached (including the initial state). Implements BFS. Does not call handler function on initial state.
-void FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore& initial_prefix_score, float initial_weight, bool handle_initial, std::function<void(PrefixScore&, float)> handle_prefix_score) {
+// Follow epsilon transitions on grammar, accumulating weights, calling handler function with each grammar state reached (including the initial state). Implements BFS. Does not call handler function on initial state, if instructed not to.
+void CtcPrefixWfstBeamSearch::FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& matcher, const PrefixScore& initial_prefix_score, float initial_weight, bool handle_initial, std::function<void(PrefixScore&, float)> handle_prefix_score) {
   auto initial_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(initial_prefix_score, matcher.GetFst());
   std::list<fst::StdArc> state_queue({fst::StdArc(fst::kNoLabel, fst::kNoLabel, initial_weight, initial_fst_state)});
   std::unordered_set<int> queued_states({initial_fst_state});
+
   while (!state_queue.empty()) {
-    const auto fst_state = state_queue.front().nextstate;
-    const auto weight = state_queue.front().weight;
+    const auto& arc_to_state = state_queue.front();
+    const auto fst_state = arc_to_state.nextstate;
+    const auto weight = arc_to_state.weight;
 
     if (handle_initial || fst_state != initial_fst_state) {
       PrefixScore new_prefix_score = initial_prefix_score;
-      new_prefix_score.FollowGrammarArc(state_queue.front());
+      if (!(arc_to_state.ilabel == fst::kNoLabel && arc_to_state.olabel == fst::kNoLabel)) {
+        // This is a valid arc, not the fake initial arc we initialized the queue with.
+        if (new_prefix_score.rule_number == -1 && arc_to_state.olabel >= rule0_label_) {
+          // Note: this should also be the initial_fst_state, but we don't check that here.
+          new_prefix_score.rule_number = arc_to_state.olabel - rule0_label_;
+          // VLOG(1) << "FollowEpsilons: rule_number = " << new_prefix_score.rule_number;
+        }
+        new_prefix_score.FollowGrammarArc(arc_to_state);
+      }
       // VLOG(2) << "FollowEpsilons: handle_prefix_score: " << initial_fst_state << " -> " << new_prefix_score.grammar_fst_state;
       handle_prefix_score(new_prefix_score, weight.Value());
     }
@@ -426,6 +442,9 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
   // We are never called with the blank unit id or an id<0, unless we doing final processing. For final processing, we are called with the blank unit id, to indicate that we should consider any in-progress words to now be complete.
   CHECK((id != opts_.blank) != final);  // XOR
 
+  next_prefix_score.CopyStateOnly(current_prefix_score);
+  // CHECK(current_prefix_score.StatesEqual(next_prefix_score)) << "current_prefix_score: " << current_prefix_score.StateString(true) << " next_prefix_score: " << next_prefix_score.StateString(true);
+
   if (final) {
     // If final, we follow any epsilon transitions, after normal processing.
     add_new_next_prefix_score = [this, add_new_next_prefix_score](PrefixScore& new_next_prefix_score, float weight) {
@@ -451,7 +470,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     };
 
     if (dictation_lexiconfree_label_ != fst::kNoLabel && grammar_matcher_->Find(dictation_lexiconfree_label_)) {
-      VLOG(1) << "    found dictation_lexiconfree_label_";
+      VLOG(2) << "    found dictation_lexiconfree_label_";
       PrefixScore new_next_prefix_score = next_prefix_score;
       new_next_prefix_score.is_in_grammar = false;
       follow_arc(new_next_prefix_score, grammar_matcher_->Value());
@@ -503,7 +522,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
         }
       );
     }
-    // Fall through and continue, to handle this state.
+    // Fall through and continue, to handle this state, without following any possible epsilon transitions.
   }
 
   // Handle free dictation, outside the grammar.

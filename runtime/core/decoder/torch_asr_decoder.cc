@@ -237,6 +237,12 @@ void TorchAsrDecoder::UpdateResult(bool finish) {
         path.word_pieces.emplace_back(word_piece);
       }
     }
+
+    if (searcher_->Type() == kPrefixWfstBeamSearch) {
+      const auto& cast_searcher = static_cast<wenet::CtcPrefixWfstBeamSearch&>(*searcher_);
+      path.rule_number = cast_searcher.RuleNumber()[i];
+    }
+
     path.sentence = post_processor_->Process(path.sentence, finish);
     result_.emplace_back(path);
   }
