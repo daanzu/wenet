@@ -370,12 +370,18 @@ void CtcPrefixWfstBeamSearch::FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& m
 
     if (handle_initial || fst_state != initial_fst_state) {
       PrefixScore new_prefix_score = initial_prefix_score;
+      // Only process as an arc (follow it) if it is not the fake initial arc we initialized the queue with.
       if (!(arc_to_state.ilabel == fst::kNoLabel && arc_to_state.olabel == fst::kNoLabel)) {
-        // This is a valid arc, not the fake initial arc we initialized the queue with.
+        // Set the rule_number if it has not been set yet, and the olabel is a valid rule number.
         if (new_prefix_score.rule_number == -1 && arc_to_state.olabel >= rule0_label_) {
           // Note: this should also be the initial_fst_state, but we don't check that here.
           new_prefix_score.rule_number = arc_to_state.olabel - rule0_label_;
           // VLOG(1) << "FollowEpsilons: rule_number = " << new_prefix_score.rule_number;
+        }
+        // Handle entering dictation_lexiconfree_label_.
+        if (arc_to_state.olabel == dictation_lexiconfree_label_) {
+          CHECK(new_prefix_score.is_in_grammar);
+          new_prefix_score.is_in_grammar = false;
         }
         new_prefix_score.FollowGrammarArc(arc_to_state);
       }
@@ -464,23 +470,12 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     auto grammar_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(current_prefix_score, *grammar_fst_);
     grammar_matcher_->SetState(grammar_fst_state);
 
-    auto follow_arc = [&add_new_next_prefix_score](PrefixScore& new_next_prefix_score, const fst::StdArc& arc) {
-      new_next_prefix_score.FollowGrammarArc(arc);
-      add_new_next_prefix_score(new_next_prefix_score, -arc.weight.Value());
-    };
-
-    if (dictation_lexiconfree_label_ != fst::kNoLabel && grammar_matcher_->Find(dictation_lexiconfree_label_)) {
-      VLOG(2) << "    found dictation_lexiconfree_label_";
-      PrefixScore new_next_prefix_score = next_prefix_score;
-      new_next_prefix_score.is_in_grammar = false;
-      follow_arc(new_next_prefix_score, grammar_matcher_->Value());
-      CHECK((grammar_matcher_->Next(), grammar_matcher_->Done()));  // Assume deterministic FST.
-    }
-
     grammar_matcher_->Find(word_id);
     for (; !grammar_matcher_->Done(); grammar_matcher_->Next()) {
       PrefixScore new_next_prefix_score = next_prefix_score;
-      follow_arc(new_next_prefix_score, grammar_matcher_->Value());
+      const auto& arc = grammar_matcher_->Value();
+      new_next_prefix_score.FollowGrammarArc(arc);
+      add_new_next_prefix_score(new_next_prefix_score, -arc.weight.Value());
     }
   };  // check_complete_word()
 
