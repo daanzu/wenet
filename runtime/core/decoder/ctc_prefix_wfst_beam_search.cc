@@ -372,14 +372,15 @@ void CtcPrefixWfstBeamSearch::FollowEpsilons(CtcPrefixWfstBeamSearch::Matcher& m
       PrefixScore new_prefix_score = initial_prefix_score;
       // Only process as an arc (follow it) if it is not the fake initial arc we initialized the queue with.
       if (!(arc_to_state.ilabel == fst::kNoLabel && arc_to_state.olabel == fst::kNoLabel)) {
-        // Set the rule_number if it has not been set yet, and the olabel is a valid rule number.
-        if (new_prefix_score.rule_number == -1 && arc_to_state.olabel >= rule0_label_) {
-          // Note: this should also be the initial_fst_state, but we don't check that here.
+        // Handle nonterminal arcs.
+        if (arc_to_state.olabel >= rule0_label_ && new_prefix_score.rule_number == -1) {
+          // Set the rule_number if it has not been set yet, and the olabel is a valid rule number.
+          // Note: this should also be the initial_fst_state iteration, but we don't check that here.
           new_prefix_score.rule_number = arc_to_state.olabel - rule0_label_;
           // VLOG(1) << "FollowEpsilons: rule_number = " << new_prefix_score.rule_number;
-        }
-        // Handle entering dictation_lexiconfree_label_.
-        if (arc_to_state.olabel == dictation_lexiconfree_label_) {
+        } else if (arc_to_state.olabel == nonterm_end_label_ && !new_prefix_score.is_in_grammar) {
+          new_prefix_score.is_in_grammar = true;
+        } else if (arc_to_state.olabel == dictation_lexiconfree_label_) {
           CHECK(new_prefix_score.is_in_grammar);
           new_prefix_score.is_in_grammar = false;
         }
@@ -522,6 +523,7 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
 
   // Handle free dictation, outside the grammar.
   if (!current_prefix_score.is_in_grammar) {
+    // Check the validity of the FST.
     auto grammar_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(next_prefix_score, *grammar_fst_);
     grammar_matcher_->SetState(grammar_fst_state);
     CHECK(grammar_matcher_->Find(0));  // We must have at least one way to end the dictation, and possibly multiple.
@@ -532,20 +534,8 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
     CHECK((grammar_matcher_->Next(), grammar_matcher_->Done()));  // Assume deterministic FST.
     CHECK_EQ(weight, 0);  // We don't support weights on the dictation-end arc.
 
-    // Recurse, assuming we ended the dictation immediately before receiving this word, i.e. we followed the nonterm_end_label_ arc.
-    auto new_current_prefix_score = current_prefix_score;
-    new_current_prefix_score.FollowGrammarArc(arc);
-    new_current_prefix_score.is_in_grammar = true;
-    auto new_next_prefix_score = next_prefix_score;
-    new_next_prefix_score.FollowGrammarArc(arc);
-    new_next_prefix_score.is_in_grammar = true;
-    ComputeFstScores(current_prefix, new_current_prefix_score, id, new_next_prefix_score, final, add_new_next_prefix_score);
-
-    // Finally, just absorb the new word, without ending the dictation. But we can't end the utterance (final) while in dictation without ending it first.
-    if (final) {
-      next_prefix_score.FollowGrammarArc(arc);
-      next_prefix_score.is_in_grammar = true;
-    }
+    // NOTE: The epsilon-following code handles exiting free dictation and re-entering the grammar via the nonterm_end_label_ (with epsilon ilabel).
+    // Just absorb the new word, without ending the dictation, and return.
     add_new_next_prefix_score(next_prefix_score, -opts_.dictation_wordpiece_insertion_penalty);
     return;
   }
