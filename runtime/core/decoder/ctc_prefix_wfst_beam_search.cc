@@ -529,8 +529,9 @@ void CtcPrefixWfstBeamSearch::ComputeFstScores(const std::vector<int>& current_p
   if (!current_prefix_score.is_in_grammar) {
     auto grammar_fst_state = GetPrefixScoreGrammarFstStateOrFstStart(next_prefix_score, *grammar_fst_);
     grammar_matcher_->SetState(grammar_fst_state);
-    CHECK(nonterm_end_label_ != fst::kNoLabel && grammar_matcher_->Find(nonterm_end_label_));  // We must have at least one way to end the dictation, and possibly multiple.
+    CHECK(grammar_matcher_->Find(0));  // We must have at least one way to end the dictation, and possibly multiple.
     auto arc = grammar_matcher_->Value();
+    CHECK_EQ(arc.olabel, nonterm_end_label_);  // We must have at least one way to end the dictation, and possibly multiple.
     auto weight = arc.weight.Value();
     auto nextstate = arc.nextstate;
     CHECK((grammar_matcher_->Next(), grammar_matcher_->Done()));  // Assume deterministic FST.
