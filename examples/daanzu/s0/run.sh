@@ -6,14 +6,16 @@
 
 # Use this to control how many gpu you use, It's 1-gpu training if you specify
 # just 1gpu, otherwise it's is multiple gpu training based on DDP in pytorch
+# export CUDA_VISIBLE_DEVICES=""
 export CUDA_VISIBLE_DEVICES="0"
+# export CUDA_VISIBLE_DEVICES="0,1,2,3"
 stage=0 # start from 0 if you need to start from data preparation
 stop_stage=5
 # data
 # use your own data path
 # wav data dir
 wave_data=data
-nj=16
+nj=$(nproc)
 # Optional train_config
 # 1. conf/train_transformer_large.yaml: Standard transformer
 train_config=conf/train_u2pp_conformer.yaml
@@ -25,29 +27,32 @@ dir=exp/u2pp.concat10
 
 # use average_checkpoint will get better result
 average_checkpoint=true
-decode_checkpoint=$dir/final.pt
+decode_checkpoint=
 # maybe you can try to adjust it if you can not get close results as README.md
 average_num=10
 decode_modes="attention_rescoring ctc_greedy_search ctc_prefix_beam_search attention"
-
-. tools/parse_options.sh || exit 1;
 
 # bpemode (unigram or bpe)
 nbpe=5000
 bpemode=unigram
 
-set -e
-set -u
-set -o pipefail
-
+# data directories structured like kaldi (wav.scp & text files)
 train_set=train_concat10_90train
 dev_set=train_concat10_10dev
 # recog_set="heldback-combo-comdict heldback-combo-comdict2 heldback-command heldback-dict heldback-dict-clean standard1test standard3train test_bothcombined test_commands test_dictation train train_10dev train_90train train_concat10 train_concat10_10dev train_concat10_90train"
 recog_set="heldback-combo-comdict heldback-combo-comdict2 heldback-command heldback-dict heldback-dict-clean standard1test test_bothcombined test_commands test_dictation"
 
-if [ ${stage} -le -1 ] && [ ${stop_stage} -ge -1 ]; then
-    echo "stage -1: Data Download"
-fi
+. tools/parse_options.sh || exit 1;
+
+set -e
+set -u
+set -o pipefail
+
+decode_checkpoint=${decode_checkpoint:-$dir/final.pt}
+
+# if [ ${stage} -le -1 ] && [ ${stop_stage} -ge -1 ]; then
+#     echo "stage -1: Data Download"
+# fi
 
 # if [ ${stage} -le 0 ] && [ ${stop_stage} -ge 0 ]; then
     ### Task dependent. You have to make data the following preparation part by yourself.
@@ -57,7 +62,7 @@ fi
 if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     ### Task dependent. You have to design training and dev sets by yourself.
     ### But you can utilize Kaldi recipes in most cases
-    echo "stage 1: Feature Generation"
+    echo "Stage 1: Feature Generation"
     tools/compute_cmvn_stats.py --num_workers $nj --train_config $train_config \
         --in_scp $wave_data/$train_set/wav.scp \
         --out_cmvn $wave_data/$train_set/global_cmvn
@@ -68,7 +73,7 @@ bpemodel=$wave_data/lang_char/${train_set}_${bpemode}${nbpe}
 echo "dictionary: ${dict}"
 if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     ### Task dependent. You have to check non-linguistic symbols used in the corpus.
-    echo "stage 2: Dictionary and Json Data Preparation"
+    echo "Stage 2: Dictionary and Json Data Preparation"
     mkdir -p data/lang_char/
 
     echo "<blank> 0" > ${dict} # 0 will be used for "blank" in CTC
@@ -84,9 +89,9 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
 fi
 
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
-    # Prepare wenet requried data
-    echo "Prepare data, prepare requried format"
-    for x in $train_dev ${recog_set} $train_set ; do
+    # Prepare wenet required data
+    echo "Stage 3: Prepare data, prepare required format"
+    for x in $train_set $dev_set $recog_set ; do
         tools/make_raw_list.py $wave_data/$x/wav.scp $wave_data/$x/text \
             $wave_data/$x/data.list
     done
@@ -181,11 +186,12 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
 
                 python tools/compute-wer.py --char=1 --v=1 \
                     $wave_data/$test/text $test_dir/text > $test_dir/wer
-            } #&
+            } &
 
             ((idx+=1))
-            if [ $idx -eq $num_gpus ]; then
+            if [ $idx -ge $num_gpus ]; then
               idx=0
+              wait
             fi
         }
         done
