@@ -177,26 +177,37 @@ def filter(data,
         Returns:
             Iterable[{key, wav, label, sample_rate}]
     """
+    num_elements, num_elements_passed = 0, 0
+    stats = dict(min_length=0, max_length=0, token_min_length=0, token_max_length=0, min_output_input_ratio=0, max_output_input_ratio=0,)
     for sample in data:
         assert 'sample_rate' in sample
         assert 'wav' in sample
         assert 'label' in sample
+        num_elements += 1
         # sample['wav'] is torch.Tensor, we have 100 frames every second
         num_frames = sample['wav'].size(1) / sample['sample_rate'] * 100
         if num_frames < min_length:
+            stats['min_length'] += 1
             continue
         if num_frames > max_length:
+            stats['max_length'] += 1
             continue
         if len(sample['label']) < token_min_length:
+            stats['token_min_length'] += 1
             continue
         if len(sample['label']) > token_max_length:
+            stats['token_max_length'] += 1
             continue
         if num_frames != 0:
             if len(sample['label']) / num_frames < min_output_input_ratio:
+                stats['min_output_input_ratio'] += 1
                 continue
             if len(sample['label']) / num_frames > max_output_input_ratio:
+                stats['max_output_input_ratio'] += 1
                 continue
+        num_elements_passed += 1
         yield sample
+    logging.info("processor.filter: %d / %d dropped: %r", (num_elements - num_elements_passed), num_elements, stats)
 
 
 def resample(data, resample_rate=16000):
