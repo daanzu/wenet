@@ -9,8 +9,11 @@
 # export CUDA_VISIBLE_DEVICES=""
 export CUDA_VISIBLE_DEVICES="0"
 # export CUDA_VISIBLE_DEVICES="0,1,2,3"
-stage=0 # start from 0 if you need to start from data preparation
+
+stage=0
 stop_stage=5
+only_stage=
+
 # data
 # use your own data path
 # wav data dir
@@ -48,7 +51,10 @@ set -e
 set -u
 set -o pipefail
 
-decode_checkpoint=${decode_checkpoint:-$dir/final.pt}
+if [ -n "${only_stage}" ]; then
+    stage=${only_stage}
+    stop_stage=${only_stage}
+fi
 
 # if [ ${stage} -le -1 ] && [ ${stop_stage} -ge -1 ]; then
 #     echo "stage -1: Data Download"
@@ -135,14 +141,11 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     wait
 fi
 
-if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
-    # Test model, please specify the model you want to test by --checkpoint
-    cmvn_opts=
-    $cmvn && cmvn_opts="--cmvn data/${train_set}/global_cmvn"
-    # TODO, Add model average here
-    mkdir -p $dir/test
-    if [ ${average_checkpoint} == true ]; then
-        decode_checkpoint=$dir/avg_${average_num}.pt
+decode_checkpoint=${decode_checkpoint:-$dir/final.pt}
+
+if [ ${average_checkpoint} == true ]; then
+    decode_checkpoint=$dir/avg_${average_num}.pt
+    if [ ! -f $decode_checkpoint ]; then
         echo "do model average and final checkpoint is $decode_checkpoint"
         python wenet/bin/average_model.py \
             --dst_model $decode_checkpoint \
@@ -150,6 +153,14 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --num ${average_num} \
             --val_best
     fi
+fi
+
+if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
+    # Test model, please specify the model you want to test by --checkpoint
+    cmvn_opts=
+    $cmvn && cmvn_opts="--cmvn data/${train_set}/global_cmvn"
+    # TODO, Add model average here
+    mkdir -p $dir/test
     # Specify decoding_chunk_size if it's a unified dynamic chunk trained model
     # -1 for full chunk
     decoding_chunk_size=
@@ -202,9 +213,10 @@ fi
 
 if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
     # Export the best model you want
+    echo "Stage 6: Exporting model to $decode_checkpoint"
     python wenet/bin/export_jit.py \
         --config $dir/train.yaml \
-        --checkpoint $dir/avg_${average_num}.pt \
+        --checkpoint $decode_checkpoint \
         --output_file $dir/final.zip
     cp $dict $dir/words.txt
 fi
