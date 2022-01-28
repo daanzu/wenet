@@ -36,22 +36,22 @@ nj=16
 # Optional train_config
 # 1. conf/train_transformer.yaml: Standard Conformer
 # 2. conf/train_transformer_bidecoder.yaml: Bidecoder Conformer
-train_config=conf/train_conformer_bidecoder.yaml
-checkpoint=
-cmvn=false
-do_delta=false
-dir=exp/sp_spec_aug
+# train_config=conf/train_conformer_bidecoder.yaml
+# checkpoint=
+# cmvn=false
+# do_delta=false
+# dir=exp/sp_spec_aug
 
 # Fine tuning
 train_set=train_concat10upper_90train
 dev_set=train_concat10upper_10dev
-name=gigaspeech_train_u2pp_conformer_train
-train_config=conf/finetune_${name}.yaml
-name=20210728_u2pp_conformer_exp
-train_config=exp/20210728_u2pp_conformer_exp/train_u2++_conformer.yaml
+# name=gigaspeech_train_u2pp_conformer_train
+# train_config=conf/finetune_${name}.yaml
+name=gigaspeech_20210728_u2pp_conformer_exp
+train_config=conf/finetune_gigaspeech_20210728_u2pp_conformer_train.yaml
 cmvn=true
 dir=exp/finetune_${train_set}_${name}_new
-base_model=exp/20210728_u2pp_conformer_exp/final.pt
+base_model=exp/gigaspeech_20210728_u2pp_conformer_exp/final.pt
 checkpoint=$dir/0.pt
 
 # use average_checkpoint will get better result
@@ -114,7 +114,7 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
 
 fi
 
-
+set=finetune
 dict=$wave_data/lang_char_$set/${train_set}_${bpemode}${nbpe}_units.txt
 bpemodel=$wave_data/lang_char_$set/${train_set}_${bpemode}${nbpe}
 echo "dictionary: ${dict}"
@@ -140,7 +140,7 @@ bpemodel=$base_model_dir/train_xl_unigram5000
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     # Prepare wenet requried data
     echo "Prepare data, prepare requried format"
-    for x in $dev_set $train_set; do
+    for x in $dev_set $train_set $recog_set; do
         mkdir -p $wave_data/finetune/$x
         tools/format_data.sh --nj ${nj} \
             --feat-type wav --feat $wave_data/$x/wav.scp --bpecode ${bpemodel}.model \
