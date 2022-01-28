@@ -1,6 +1,8 @@
 #!/bin/bash
 
+# Copyright 2021 David Zurow
 # Copyright 2021 Mobvoi Inc. All Rights Reserved.
+# Adapted from wenet/examples/gigaspeech/s0/run.sh + run.sh
 
 . ./path.sh || exit 1;
 

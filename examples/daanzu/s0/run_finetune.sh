@@ -1,6 +1,9 @@
 #!/bin/bash
+
+# Copyright 2021 David Zurow
 # Copyright 2021 Tencent Inc. (Author: Yougen Yuan).
 # Apach 2.0
+# Adapted from wenet/examples/vkw2021/s0/local/run_finetune_5h.sh
 
 . ./path.sh || exit 1;
 

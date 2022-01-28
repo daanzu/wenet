@@ -1,6 +1,8 @@
 #!/bin/bash
 
+# Copyright 2021 David Zurow
 # Copyright 2019 Mobvoi Inc. All Rights Reserved.
+# Adapted from wenet/examples/librispeech/s0/run.sh
 
 . ./path.sh || exit 1;
 
