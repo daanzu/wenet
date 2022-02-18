@@ -5,14 +5,19 @@ import json
 import os
 import shutil
 
-from pydub import AudioSegment
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='')
-    parser.add_argument('-m', '--min_dur', default=5.0, type=float, help='minimum duration')
+    parser.add_argument('-m', '--min', type=float, help='minimum dur')
+    parser.add_argument('-x', '--max', type=float, help='minimum dur')
     parser.add_argument('source_dir')
     parser.add_argument('output_dir')
     args = parser.parse_args()
+    print(args)
+
+    if args.min is None and args.max is None:
+        raise ValueError('Either --min or --max must be specified.')
+    if args.min is not None and args.max is not None and args.min > args.max:
+        raise ValueError('--min must be less than or equal to --max.')
 
     wav_table = {}
     with open(os.path.join(args.source_dir, 'wav.scp'), 'r', encoding='utf8') as fin:
@@ -50,27 +55,9 @@ if __name__ == '__main__':
 
     lines.sort(key=lambda x: x['dur'])
     new_lines = []
-    short_lines = []
     for line in lines:
-        if line['dur'] < args.min_dur:
-            short_lines.append(line)
-            if sum(x['dur'] for x in short_lines) > args.min_dur:
-                segment = AudioSegment.from_file(short_lines[0]['wav'])
-                for f in short_lines[1:]:
-                    segment = segment.append(AudioSegment.silent(duration=500, frame_rate=segment.frame_rate), crossfade=0)
-                    segment = segment.append(AudioSegment.from_file(f['wav']), crossfade=0)
-                new_wav_name = line['wav'][:-4] + '_combined.wav'
-                segment.export(new_wav_name, format='wav')
-                line = dict(
-                    key=line['key']+'-combined',
-                    wav=new_wav_name,
-                    txt=' '.join(x['txt'] for x in short_lines),
-                    dur=segment.duration_seconds,
-                    spk='--'.join(x['spk'] for x in short_lines),
-                )
-                short_lines = []
-            else:
-                continue
+        if (args.min is not None and line['dur'] < args.min) or (args.max is not None and line['dur'] > args.max):
+            continue
         new_lines.append(line)
 
     new_lines.sort(key=lambda x: x['key'])
@@ -95,4 +82,4 @@ if __name__ == '__main__':
                 fout_spk.write('{key} {spk}\n'.format(**line))
                 fout_dur.write('{key} {dur}\n'.format(**line))
 
-    print("Combined {} utterances into {} utterances, from {} into {}".format(len(lines), len(new_lines), args.source_dir, args.output_dir))
+    print("Filtered {:.0f}% {} utterances into {} utterances, from {} into {}".format(len(new_lines) / len(lines) * 100, len(lines), len(new_lines), args.source_dir, args.output_dir))
