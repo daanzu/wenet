@@ -172,6 +172,35 @@ def _load_wav_with_speed(wav_file, speed):
     return wav, sr
 
 
+def _load_wav_with_effects(wav_file, speed=None, tempo=None, pitch=None):
+    """ Load the wave from file and apply various effects
+
+    Args:
+        wav_file
+
+    Returns:
+        augmented feature
+    """
+    sample_rate = torchaudio.backend.sox_io_backend.info(
+        wav_file).sample_rate
+    # get torchaudio version
+    ta_no = torchaudio.__version__.split(".")
+    ta_version = 100 * int(ta_no[0]) + 10 * int(ta_no[1])
+    assert ta_version >= 80, "torchaudio version >= 0.8.0 required"
+
+    effects = []
+    if speed is not None:
+        effects.append(['speed', f'{speed:.5f}'])
+    if tempo is not None:
+        effects.append(['tempo', f'{tempo:.5f}'])
+    if pitch is not None:
+        effects.append(['pitch', f'{pitch:d}'])
+    effects.append(['rate', str(sample_rate)])
+    # logging.debug(f"effects: {effects}")
+    wav, sr = sox_effects.apply_effects_file(wav_file, effects)
+    return wav, sr
+
+
 def _extract_feature(batch, speed_perturb, wav_distortion_conf,
                      feature_extraction_conf):
     """ Extract acoustic fbank feature from origin waveform.
@@ -211,7 +240,15 @@ def _extract_feature(batch, speed_perturb, wav_distortion_conf,
                 resample_rate = feature_extraction_conf['resample']
             else:
                 resample_rate = sample_rate
-            if speed_perturb:
+            if False and speed_perturb:
+                assert len(value) == 1
+                effects = {
+                    # 'speed': random.choice(np.linspace(0.85, 1.15, 11)),
+                    'speed': random.choice(np.linspace(0.86, 1.14, 15)),
+                    # 'tempo': random.choice([f'{x:.2f}' for x in np.linspace(0.85, 1.15, 11)]),
+                }
+                waveform, sample_rate = _load_wav_with_effects(wav_path, **effects)
+            elif speed_perturb:
                 if len(value) == 3:
                     logging.error(
                         "speed perturb does not support segmented wav.scp now")
