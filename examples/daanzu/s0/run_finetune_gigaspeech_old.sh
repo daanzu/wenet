@@ -47,33 +47,36 @@ nj=16
 # Fine tuning
 train_set=train_concat10upper_90train
 dev_set=train_concat10upper_10dev
-# name=gigaspeech_train_u2pp_conformer_train
-# train_config=conf/finetune_${name}.yaml
-name=gigaspeech_20210728_u2pp_conformer_exp
+recog_set="test_set"
+base_model_name=gigaspeech_20210728_u2pp_conformer_exp
 train_config=conf/finetune_gigaspeech_20210728_u2pp_conformer_train.yaml
 cmvn=true
-dir=exp/finetune_${train_set}_${name}_new
+dir=
 base_model=exp/gigaspeech_20210728_u2pp_conformer_exp/final.pt
-checkpoint=$dir/0.pt
+checkpoint=
 
 # use average_checkpoint will get better result
 average_checkpoint=true
-decode_checkpoint=$dir/final.pt
-# maybe you can try to adjust it if you can not get close results as README.md
+decode_checkpoint=
 average_num=3
-decode_modes="attention_rescoring ctc_greedy_search"
-
-. tools/parse_options.sh || exit 1;
-
-base_model_dir=`dirname $base_model`
+decode_modes="attention_rescoring ctc_greedy_search ctc_prefix_beam_search attention"
 
 # bpemode (unigram or bpe)
 nbpe=5000
 bpemode=unigram
 
+. tools/parse_options.sh || exit 1;
+
 set -e
 set -u
 set -o pipefail
+
+echo "base_model_name: $base_model_name"
+dir=${dir:-exp/finetune_${train_set}_${base_model_name}_new}
+echo "dir: $dir"
+checkpoint=${checkpoint:-$dir/0.pt}
+decode_checkpoint=${decode_checkpoint:-$dir/final.pt}
+base_model_dir=`dirname $base_model`
 
 if [ -n "${only_stage}" ]; then
     stages_array=(${only_stage//,/ })
