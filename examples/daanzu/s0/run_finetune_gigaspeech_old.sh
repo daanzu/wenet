@@ -309,6 +309,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             ((idx+=1))
             if [ $idx -eq $num_gpus ]; then
               idx=0
+              wait
             fi
         }
         done
