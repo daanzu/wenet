@@ -9,8 +9,10 @@
 # Use this to control how many gpu you use, It's 1-gpu training if you specify
 # just 1gpu, otherwise it's is multiple gpu training based on DDP in pytorch
 export CUDA_VISIBLE_DEVICES="0"
-stage=0 # start from 0 if you need to start from data preparation
+
+stage=0
 stop_stage=5
+only_stage=
 
 # The num of nodes or machines used for multi-machine training
 # Default 1 for single machine/node
@@ -72,6 +74,16 @@ bpemode=unigram
 set -e
 set -u
 set -o pipefail
+
+if [ -n "${only_stage}" ]; then
+    stages_array=(${only_stage//,/ })
+    stage=${stages_array[0]}
+    stop_stage=${stages_array[-1]}
+    # stage=${only_stage}
+    # stop_stage=${only_stage}
+fi
+
+[ ${stage} -ge 3 ] || (echo "stage must be >= 3 for finetuning" && exit 1)
 
 if [ ${stage} -le 0 ] && [ ${stop_stage} -ge 0 ]; then
     ### Task dependent. You have to make data the following preparation part by yourself.
@@ -227,21 +239,25 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     wait
 fi
 
+if [ ${average_checkpoint} == true ] && [ ${stop_stage} -ge 5 ]; then
+    decode_checkpoint=$dir/avg_${average_num}.pt
+    if [ ! -f $decode_checkpoint ]; then
+        echo "do model average and final checkpoint is $decode_checkpoint" |& tee -a $dir/train.log
+        python wenet/bin/average_model.py \
+            --dst_model $decode_checkpoint \
+            --src_path $dir  \
+            --num ${average_num} \
+            --val_best \
+            |& tee -a $dir/train.log
+    fi
+fi
+
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     # Test model, please specify the model you want to test by --checkpoint
     cmvn_opts=
     $cmvn && cmvn_opts="--cmvn data/${train_set}/global_cmvn"
     # TODO, Add model average here
     mkdir -p $dir/test
-    if [ ${average_checkpoint} == true ]; then
-        decode_checkpoint=$dir/avg_${average_num}.pt
-        echo "do model average and final checkpoint is $decode_checkpoint"
-        python wenet/bin/average_model.py \
-            --dst_model $decode_checkpoint \
-            --src_path $dir  \
-            --num ${average_num} \
-            --val_best
-    fi
     # Specify decoding_chunk_size if it's a unified dynamic chunk trained model
     # -1 for full chunk
     decoding_chunk_size=
