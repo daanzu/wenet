@@ -32,6 +32,9 @@ class Executor:
         num_total_batch = len(data_loader)
         for batch_idx, batch in enumerate(data_loader):
             key, feats, target, feats_lengths, target_lengths = batch
+            # logging.debug("batch %d: key %s", batch_idx, key)
+            # logging.debug("batch %d: target_lengths %s", batch_idx, target_lengths.tolist())
+            # logging.debug("batch %d: feats_lengths %s", batch_idx, feats_lengths.tolist())
             feats = feats.to(device)
             target = target.to(device)
             feats_lengths = feats_lengths.to(device)
@@ -65,6 +68,10 @@ class Executor:
             num_seen_utts += num_utts
             if batch_idx % accum_grad == 0:
                 if rank == 0 and writer is not None:
+                    # logging.debug("train_loss: %s", loss.item())
+                    if not torch.isfinite(loss):
+                        logging.warning("infinite loss: batch %d", batch_idx)
+                        # logging.warning("infinite loss: batch %d: key %s", batch_idx, key)
                     writer.add_scalar('train_loss', loss, self.step)
                 # Use mixed precision training
                 if use_amp:

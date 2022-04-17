@@ -82,8 +82,17 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    if args.rank == 0:
+        # Needed so that directory exists for logging to file below
+        os.makedirs(args.model_dir, exist_ok=True)
     logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(levelname)s %(message)s')
+                        format='%(asctime)s %(levelname)s %(message)s',
+                        # format='%(asctime)s %(levelname)s %(pathname)s:%(lineno)d %(message)s',
+                        handlers=[
+                            logging.StreamHandler(),
+                            logging.FileHandler(os.path.join(args.model_dir, 'train.log')),
+                        ],
+                        )
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
     # Set random seed
     torch.manual_seed(777)
