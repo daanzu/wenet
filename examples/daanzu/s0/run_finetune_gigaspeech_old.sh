@@ -8,6 +8,7 @@
 
 # Use this to control how many gpu you use, It's 1-gpu training if you specify
 # just 1gpu, otherwise it's is multiple gpu training based on DDP in pytorch
+# Example: export CUDA_VISIBLE_DEVICES="0,1,2,3"
 export CUDA_VISIBLE_DEVICES="0"
 
 stage=0
@@ -153,8 +154,8 @@ fi
 dict=$base_model_dir/words.txt
 bpemodel=$base_model_dir/train_xl_unigram5000
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
-    # Prepare wenet requried data
-    echo "Prepare data, prepare requried format"
+    # Prepare wenet required data
+    echo "Prepare data, prepare required format"
     for x in $dev_set $train_set $recog_set; do
         sed -i 's/ .*/\U&/' $wave_data/$x/text  # force uppercase
         tools/format_data.sh --nj ${nj} \
@@ -179,6 +180,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     # how many workers to wait for.
     # More details about ddp can be found in
     # https://pytorch.org/tutorials/intermediate/dist_tuto.html
+    echo "num_gpus: $num_gpus"
     world_size=`expr $num_gpus \* $num_nodes`
     echo "total gpus is: $world_size"
     cmvn_opts=
@@ -190,7 +192,6 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     # export later
     for ((i = 0; i < $num_gpus; ++i)); do
     {
-        echo "num_gpus: $num_gpus"
         gpu_id=$(echo $CUDA_VISIBLE_DEVICES | cut -d',' -f$[$i+1])
         # Rank of each gpu/process used for knowing whether it is
         # the master of a worker.
