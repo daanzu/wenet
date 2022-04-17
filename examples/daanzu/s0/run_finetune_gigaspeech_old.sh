@@ -317,8 +317,10 @@ fi
 
 if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
     # Export the best model you want
+    echo "Stage 6: Exporting model to $decode_checkpoint"
     python wenet/bin/export_jit.py \
         --config $dir/train.yaml \
-        --checkpoint $dir/avg_${average_num}.pt \
+        --checkpoint $decode_checkpoint \
         --output_file $dir/final.zip
+    cp $dict $dir/words.txt
 fi
