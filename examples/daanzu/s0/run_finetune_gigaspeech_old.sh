@@ -156,10 +156,10 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     # Prepare wenet requried data
     echo "Prepare data, prepare requried format"
     for x in $dev_set $train_set $recog_set; do
-        mkdir -p $wave_data/finetune/$x
+        sed -i 's/ .*/\U&/' $wave_data/$x/text  # force uppercase
         tools/format_data.sh --nj ${nj} \
             --feat-type wav --feat $wave_data/$x/wav.scp --bpecode ${bpemodel}.model \
-            $wave_data/$x ${dict} > $wave_data/finetune/$x/format.data
+            $wave_data/$x ${dict} > $wave_data/$x/format.data
 
     done
 
@@ -203,16 +203,16 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
             cp $base_model_dir/train.yaml $dir/0.yaml
         # echo "--gpu $gpu_id \
         #     --config $train_config \
-        #     --train_data $wave_data/finetune/${train_set}/format.data \
-        #     --cv_data $wave_data/finetune/${dev_set}/format.data \
+        #     --train_data $wave_data/${train_set}/format.data \
+        #     --cv_data $wave_data/${dev_set}/format.data \
         #     ${checkpoint:+--checkpoint $checkpoint} \
         #     --model_dir $dir \
         #     --num_workers 4 \
         #     $cmvn_opts"
         python wenet/bin/train.py --gpu $gpu_id \
             --config $train_config \
-            --train_data $wave_data/finetune/${train_set}/format.data \
-            --cv_data $wave_data/finetune/${dev_set}/format.data \
+            --train_data $wave_data/${train_set}/format.data \
+            --cv_data $wave_data/${dev_set}/format.data \
             ${checkpoint:+--checkpoint $checkpoint} \
             --model_dir $dir \
             --num_workers 4 \
@@ -278,7 +278,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
                 python wenet/bin/recognize.py --gpu $gpu_id \
                     --mode $mode \
                     --config $dir/train.yaml \
-                    --test_data $wave_data/gigaspeech_$test/format.data \
+                    --test_data $wave_data/$test/format.data \
                     --checkpoint $decode_checkpoint \
                     --beam_size 20 \
                     --batch_size 1 \
@@ -295,13 +295,13 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
                 paste -d " " $test_dir/text_bpe_key_tmp $test_dir/text_value > $test_dir/text
                 # a raw version wer without refining processs
                 python tools/compute-wer.py --char=1 --v=1 \
-                    $wave_data/gigaspeech_$test/text $test_dir/text > $test_dir/wer
+                    $wave_data/$test/text $test_dir/text > $test_dir/wer
 
                 # for gigaspeech scoring
-                cat $test_dir/text_bpe_key_tmp | sed -e "s/^/(/g" | sed -e "s/$/)/g" > $test_dir/hyp_key
-                paste -d " " $test_dir/text_value $test_dir/hyp_key > $test_dir/hyp
-                paste -d " " <(cut -f2- -d " " $wave_data/gigaspeech_$test/text) <(cut -f1 -d " " $wave_data/gigaspeech_$test/text | sed -e "s/^/(/g" | sed -e "s/$/)/g") > $wave_data/gigaspeech_$test/ref
-                local/gigaspeech_scoring.py $wave_data/gigaspeech_$test/ref $test_dir/hyp $test_dir
+                # cat $test_dir/text_bpe_key_tmp | sed -e "s/^/(/g" | sed -e "s/$/)/g" > $test_dir/hyp_key
+                # paste -d " " $test_dir/text_value $test_dir/hyp_key > $test_dir/hyp
+                # paste -d " " <(cut -f2- -d " " $wave_data/$test/text) <(cut -f1 -d " " $wave_data/$test/text | sed -e "s/^/(/g" | sed -e "s/$/)/g") > $wave_data/$test/ref
+                # local/gigaspeech_scoring.py $wave_data/$test/ref $test_dir/hyp $test_dir
             } &
 
             ((idx+=1))
