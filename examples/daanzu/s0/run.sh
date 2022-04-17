@@ -145,7 +145,7 @@ fi
 
 decode_checkpoint=${decode_checkpoint:-$dir/final.pt}
 
-if [ ${average_checkpoint} == true ]; then
+if [ ${average_checkpoint} == true ] && [ ${stop_stage} -ge 5 ]; then
     decode_checkpoint=$dir/avg_${average_num}.pt
     if [ ! -f $decode_checkpoint ]; then
         echo "do model average and final checkpoint is $decode_checkpoint"
