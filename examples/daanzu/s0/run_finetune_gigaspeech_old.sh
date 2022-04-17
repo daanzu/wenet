@@ -217,7 +217,8 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
             ${checkpoint:+--checkpoint $checkpoint} \
             --model_dir $dir \
             --num_workers 4 \
-            $cmvn_opts
+            $cmvn_opts \
+            || exit 1;
             # --ddp.init_method $init_method \
             # --ddp.world_size $world_size \
             # --ddp.rank $rank \
